@@ -1,0 +1,22 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual Environment
+venv/
+.env
+
+# Build artifacts
+build/
+*.vcd
+*.vvp
+
+# Data and Models
+software/data/
+*.pth
+software/output_test/
+wandb/
+
+# OS files
+.DS_Store
