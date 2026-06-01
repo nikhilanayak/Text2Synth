@@ -1,4 +1,5 @@
 # CLAP-Synth: Embedded Neural FM Synthesizer
+![Made With AI](https://ai-label.org/image-pack/ai-label_banner-made-with-ai.svg)
 
 A generative synthesizer that uses on-chip Neural Inference to design its own internal FM patches based on semantic embeddings.
 
