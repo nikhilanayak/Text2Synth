@@ -59,72 +59,89 @@ class DifferentiableFMSynth(nn.Module):
         - 0-3: Operator Ratios (0.5 to 16.0)
         - 4-7: Operator Amplitudes (0.0 to 1.0)
         - 8-23: ADSR Envelopes (4 ops * 4 params)
-        - 24-39: Modulation Matrix (4x4)
+        - 24-39: Modulation Matrix (4x4) - src modulates dst
         - 40-43: Feedback (per op)
-        - 44-47: Detune (Hz)
+        - 44-47: Detune (-5Hz to +5Hz)
         - 48-51: Noise Parameters (Amp, Color, ADSR_A, ADSR_R)
         """
         batch_size = params.shape[0]
+        device = params.device
         
-        # Unpack FM parameters
+        # 1. Unpack FM parameters
         ratios = params[:, 0:4] * 15.5 + 0.5
         amps = params[:, 4:8]
         adsr = params[:, 8:24].view(batch_size, 4, 4)
+        mod_matrix = params[:, 24:40].view(batch_size, 4, 4) # [batch, src, dst]
+        feedback = params[:, 40:44] * 2.0 # Feedback depth
+        detune = (params[:, 44:48] - 0.5) * 10.0 # +/- 5Hz
         
-        # 1. Generate Envelopes
+        # 2. Generate Envelopes
         envelopes = []
         for i in range(4):
             envs = []
             for b in range(batch_size):
                 env = self.get_adsr_envelope(adsr[b, i, 0], adsr[b, i, 1], adsr[b, i, 2], adsr[b, i, 3])
                 envs.append(env)
-            envelopes.append(torch.stack(envs)) 
+            envelopes.append(torch.stack(envs)) # (batch, n_samples)
         
-        # 2. FM Oscillation
-        modulator = torch.zeros(batch_size, self.n_samples, device=params.device)
-        for i in reversed(range(4)):
-            freq = (f0 * ratios[:, i:i+1]) + modulator
-            dp = 2 * np.pi * freq / self.sr
-            p = torch.cumsum(dp, dim=1)
-            out = torch.sin(p) * envelopes[i] * amps[:, i:i+1]
-            modulator = out * 1000.0 
+        # 3. FM Oscillation (Functional-Iterative for Autograd Compatibility)
+        # To avoid "in-place" errors, we collect outputs in a list and avoid slice-assignment.
+        all_step_outputs = [] # To store [batch, 4] at each sample
+        phases = torch.zeros(4, batch_size, device=device)
+        prev_out = torch.zeros(batch_size, 4, device=device) # [batch, 4]
+        
+        # Fundamental Frequencies for each op
+        freqs_base = (f0 * ratios) + detune # (batch, 4)
+        
+        # Stack envelopes for vectorized access: [4, batch, n_samples]
+        stacked_envs = torch.stack(envelopes, dim=0)
+        
+        for n in range(self.n_samples):
+            # modulation: [batch, 4] = [batch, 1, 4] @ [batch, 4, 4]
+            # mod_matrix [src, dst]
+            modulation = torch.bmm(prev_out.unsqueeze(1), mod_matrix).squeeze(1)
             
-        fm_audio = out 
+            # Total freq for this sample
+            # prev_out is [batch, 4], feedback is [batch, 4]
+            curr_freqs = freqs_base + (modulation * 1000.0) + (prev_out * feedback * 500.0)
+            
+            # Update Phase (New tensor created each step, no in-place +=)
+            dp = 2 * np.pi * curr_freqs.T / self.sr # [4, batch]
+            phases = phases + dp
+            
+            # Compute raw oscillators
+            curr_out_raw = torch.sin(phases).T # [batch, 4]
+            
+            # Apply envelopes and amplitudes for this sample index 'n'
+            # stacked_envs[:, :, n].T is [batch, 4]
+            curr_out = curr_out_raw * stacked_envs[:, :, n].T * amps
+            
+            # Store and update state for next sample
+            all_step_outputs.append(curr_out)
+            prev_out = curr_out # No in-place update
+            
+        # Combine all steps: [batch, 4, n_samples]
+        outputs_stacked = torch.stack(all_step_outputs, dim=2)
+        
+        # Final mix: sum all 4 operators
+        final_fm_audio = outputs_stacked.sum(dim=1)
 
-        # 3. Differentiable Noise (Milestone 1.1 Upgrade)
-        # params 48-51: [Noise_Amp, Noise_Filter, Noise_A, Noise_R]
+        # 4. Differentiable Noise (Same as before but vectorized)
         noise_amp = params[:, 48:49]
-        
-        # Generate white noise
-        noise = torch.randn(batch_size, self.n_samples, device=params.device)
-        
-        # FIR Filter (Vectorized & MPS-Friendly)
-        # We create a simple low-pass kernel based on the 'Noise_Filter' param
-        # A 16-tap moving average is very fast on GPU.
+        noise = torch.randn(batch_size, self.n_samples, device=device)
         kernel_size = 16
-        # Each batch gets its own kernel (simplified: use parameter to scale a ramp)
-        # For even more speed, we can use a fixed kernel and just scale the output
-        kernel = torch.ones(1, 1, kernel_size, device=params.device) / kernel_size
-        
-        # F.conv1d expects (batch, channels, time)
+        kernel = torch.ones(1, 1, kernel_size, device=device) / kernel_size
         filtered_noise = F.conv1d(noise.unsqueeze(1), kernel, padding=kernel_size//2).squeeze(1)
-        
-        # Normalize filtered noise
+        filtered_noise = filtered_noise[:, :self.n_samples]
         filtered_noise = filtered_noise / (torch.norm(filtered_noise, dim=1, keepdim=True) + 1e-8)
         
-        # Apply Noise Envelope (Simple AR)
         noise_env = []
         for b in range(batch_size):
             env = self.get_adsr_envelope(params[b, 50], 0.0, 1.0, params[b, 51])
             noise_env.append(env)
-        noise_env = torch.stack(noise_env)
+        noise_audio = torch.stack(noise_env) * filtered_noise * noise_amp
         
-        noise_audio = filtered_noise * noise_env * noise_amp
-        
-        # 4. Final Mix
-        final_audio = fm_audio + noise_audio
-        
-        return final_audio
+        return final_fm_audio + noise_audio
 
 if __name__ == "__main__":
     # Test the synth

@@ -14,10 +14,10 @@ from loss import MultiScaleSpectralLoss, CLAPLoss
 import laion_clap
 
 # --- Configuration ---
-SR = 16000 
+SR = 16000 # Standard training SR
 DURATION = 1.0
 BATCH_SIZE = 4 
-LR = 1e-4
+LR = 5e-4 # Increased LR for faster break-out
 DEVICE = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
 CHECKPOINT_PATH = "software/training_checkpoint.pth"
 WANDB_PROJECT = "clap-synth-fpga"
@@ -27,14 +27,18 @@ WANDB_PROJECT = "clap-synth-fpga"
 class Mapper(nn.Module):
     def __init__(self, input_dim=512, output_dim=52): 
         super().__init__()
+        # Significantly increased capacity: 4 layers, wider units
         self.net = nn.Sequential(
-            nn.Linear(input_dim, 512),
+            nn.Linear(input_dim, 1024),
+            nn.LayerNorm(1024),
+            nn.LeakyReLU(0.2),
+            nn.Linear(1024, 1024),
+            nn.LayerNorm(1024),
+            nn.LeakyReLU(0.2),
+            nn.Linear(1024, 512),
             nn.LayerNorm(512),
-            nn.ReLU(),
-            nn.Linear(512, 256),
-            nn.LayerNorm(256),
-            nn.ReLU(),
-            nn.Linear(256, output_dim),
+            nn.LeakyReLU(0.2),
+            nn.Linear(512, output_dim),
             nn.Sigmoid() 
         )
 
@@ -117,9 +121,8 @@ def train():
     all_files, class_to_files = setup_esc50()
     class_names = list(class_to_files.keys())
 
-    # 3. Pre-compute embeddings for ESC-50 (Incremental Caching with Filtering)
     embed_cache_path = "software/data/esc50_embeds_v6_filtered.pth"
-    CONSISTENCY_THRESHOLD = 0.25 # Initial threshold (we can tune this)
+    CONSISTENCY_THRESHOLD = 0.25 
 
     if os.path.exists(embed_cache_path):
         print("Loading filtered incremental embedding cache...")
@@ -132,22 +135,17 @@ def train():
     if files_to_process:
         meta_df = pd.read_csv("software/data/esc50/meta/esc50.csv")
         with torch.no_grad():
-            # Pre-compute Text Embeddings
             for cat in tqdm(class_names, desc="Text Encoding"):
                 prompt = f"A recording of the sound of {cat}"
                 t_emb = clap_model.get_text_embedding([prompt], use_tensor=True)
                 cache['class_to_text_embed'][cat] = t_emb.cpu()
 
-            # Encode and Filter Audio
             for i, f in enumerate(tqdm(files_to_process, desc="Audio Filtering")):
                 audio, orig_sr = torchaudio.load(f)
                 audio_mono = audio.mean(0, keepdim=True)
-                
-                # Encode for CLAP
                 audio_48k = torchaudio.transforms.Resample(orig_sr, 48000)(audio_mono)
                 a_emb = clap_model.get_audio_embedding_from_data(x=audio_48k, use_tensor=True)
                 
-                # Check Consistency
                 fname = os.path.basename(f)
                 cat = meta_df.query(f"filename == '{fname}'")['category'].iloc[0]
                 t_emb = cache['class_to_text_embed'][cat]
@@ -155,7 +153,6 @@ def train():
                 sim = torch.nn.functional.cosine_similarity(a_emb.cpu(), t_emb, dim=1).item()
                 cache['similarities'].append(sim)
                 
-                # We store everything but will filter during training
                 audio_16k = torchaudio.transforms.Resample(orig_sr, SR)(audio_mono)
                 cache['file_to_audio'][f] = audio_16k.cpu()
                 cache['audio_embeds'].append(a_emb.cpu())
@@ -166,16 +163,7 @@ def train():
                     torch.save(cache, embed_cache_path)
         torch.save(cache, embed_cache_path)
 
-    # Dataset Analysis
     sims = np.array(cache['similarities'])
-    print(f"\n--- Dataset Quality Report ---")
-    print(f"Total Clips: {len(sims)}")
-    print(f"Mean Consistency: {sims.mean():.4f}")
-    for t in [0.15, 0.2, 0.25, 0.3, 0.4]:
-        count = (sims > t).sum()
-        print(f"Threshold {t}: {count} clips ({count/len(sims)*100:.1f}%)")
-
-    # Filter tensors for training
     mask = sims > CONSISTENCY_THRESHOLD
     audio_embeds = torch.cat(cache['audio_embeds'], dim=0)[mask].to(DEVICE)
     text_embeds = torch.cat(cache['text_embeds'], dim=0)[mask].to(DEVICE)
@@ -190,11 +178,18 @@ def train():
         pbar = tqdm(range(start_step, phase_1_steps), desc="Phase 1")
         for step in pbar:
             idx = np.random.randint(0, len(audio_embeds), BATCH_SIZE)
+            
+            # Input is the TEXT embedding
             input_embed = text_embeds[idx]
+            
+            # Augmentation: Add small Gaussian noise to the embeddings
+            noise = torch.randn_like(input_embed) * 0.05
+            input_embed_aug = input_embed + noise
+            
             target_audio_embed = audio_embeds[idx]
             
             optimizer.zero_grad()
-            predicted_params = mapper(input_embed)
+            predicted_params = mapper(input_embed_aug)
             gen_audio = synth(predicted_params, f0=110.0)
             
             gen_audio_48k = resample_48k(gen_audio)
@@ -203,15 +198,12 @@ def train():
             # Generative Minimum Loss
             loss_audio = clap_loss_fn(target_audio_embed, gen_embed)
             loss_text = clap_loss_fn(input_embed, gen_embed)
-            
-            # Select the path of least resistance to meaning
             loss = torch.min(loss_audio, loss_text).mean()
             
-            # Add Temporal Smoothness Regularizer (Prevent digital clicks)
-            # Penalize sudden changes in the audio wave
+            # Temporal Smoothness (Increased weight to 0.1)
             smoothness_reg = torch.abs(gen_audio[:, 1:] - gen_audio[:, :-1]).mean()
             
-            total_loss = loss + (smoothness_reg * 0.05)
+            total_loss = loss + (smoothness_reg * 0.1)
             
             total_loss.backward()
             optimizer.step()
@@ -234,34 +226,39 @@ def train():
         current_phase = 2
         start_step = 0
 
-    # --- Phase 2: Class Interpolation ---
-    # Phase 2 is actually simpler now: we interpolate between AUDIO embeds of the same class,
-    # and compare the result to the TEXT embed of that class (and the interpolated target).
-    phase_2_steps = 2000
+    # --- Phase 2: Leaf Interpolation ---
+    phase_2_steps = 3000
     if current_phase == 2:
         print(f"\n--- Phase 2: Leaf Interpolation ({phase_2_steps} steps) ---")
         mapper.train()
         pbar = tqdm(range(start_step, phase_2_steps), desc="Phase 2")
         
-        # Group indices by class for fast lookup
         meta_df = pd.read_csv("software/data/esc50/meta/esc50.csv")
-        class_to_indices = meta_df.groupby('category').indices
+        # Ensure we only use high-confidence indices for interpolation
+        high_conf_indices = np.where(sims > CONSISTENCY_THRESHOLD)[0]
+        meta_df_filtered = meta_df.iloc[high_conf_indices]
+        class_to_indices = meta_df_filtered.groupby('category').indices
         
         for step in pbar:
             cat = np.random.choice(class_names)
+            # Some classes might have been entirely filtered out
+            if cat not in class_to_indices or len(class_to_indices[cat]) < 2:
+                continue
+                
             indices = class_to_indices[cat]
             idx1, idx2 = np.random.choice(indices, 2, replace=False)
             
-            emb_a1 = audio_embeds[idx1].unsqueeze(0).repeat(BATCH_SIZE, 1)
-            emb_a2 = audio_embeds[idx2].unsqueeze(0).repeat(BATCH_SIZE, 1)
+            emb_a1 = audio_embeds[np.where(high_conf_indices == idx1)[0][0]].unsqueeze(0).repeat(BATCH_SIZE, 1)
+            emb_a2 = audio_embeds[np.where(high_conf_indices == idx2)[0][0]].unsqueeze(0).repeat(BATCH_SIZE, 1)
             emb_text = cache['class_to_text_embed'][cat].to(DEVICE).repeat(BATCH_SIZE, 1)
             
             alpha = torch.rand(BATCH_SIZE, 1).to(DEVICE)
             target_audio_embed = slerp(alpha, emb_a1, emb_a2)
             
             optimizer.zero_grad()
-            # Input is still the TEXT embedding
-            predicted_params = mapper(emb_text) 
+            # Augment text input for Phase 2 as well
+            input_noise = torch.randn_like(emb_text) * 0.05
+            predicted_params = mapper(emb_text + input_noise) 
             gen_audio = synth(predicted_params, f0=110.0)
             
             gen_audio_48k = resample_48k(gen_audio)
@@ -269,15 +266,17 @@ def train():
             
             loss_audio = clap_loss_fn(target_audio_embed, gen_embed)
             loss_text = clap_loss_fn(emb_text, gen_embed)
+            loss = torch.min(loss_audio, loss_text).mean()
             
-            loss = (loss_audio * 0.5) + (loss_text * 0.5)
+            smoothness_reg = torch.abs(gen_audio[:, 1:] - gen_audio[:, :-1]).mean()
+            total_loss = loss + (smoothness_reg * 0.1)
             
-            loss.backward()
+            total_loss.backward()
             optimizer.step()
             
             wandb.log({
                 "Phase": 2, 
-                "Loss/Total": loss.item(),
+                "Loss/Total": total_loss.item(),
                 "Loss/Audio_Interp": loss_audio.item(),
                 "Loss/Text_Alignment": loss_text.item()
             })
