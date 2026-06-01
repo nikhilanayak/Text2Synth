@@ -11,9 +11,13 @@ VVP      := vvp
 IFLAGS   := -Wall -g2012
 BUILD    := build
 
-.PHONY: all mac_pe fm_phase_accumulator wave clean
+.PHONY: all setup mac_pe fm_phase_accumulator wave clean
 
-all: mac_pe fm_phase_accumulator
+all: setup mac_pe fm_phase_accumulator
+
+setup:
+	@chmod +x setup.sh
+	./setup.sh
 
 # --- MAC processing element ---
 mac_pe: $(BUILD)/mac_pe_tb.vvp
