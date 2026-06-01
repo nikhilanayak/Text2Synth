@@ -8,26 +8,35 @@ import os
 import json
 import pandas as pd
 import wandb
+import joblib
 
-from diff_fm import DifferentiableFMSynth
+from diff_fm import DifferentiableAdditiveSynth
 from loss import MultiScaleSpectralLoss, CLAPLoss
 import laion_clap
 
 # --- Configuration ---
-SR = 16000 # Standard training SR
+SR = 16000
 DURATION = 1.0
-BATCH_SIZE = 4 
-LR = 5e-4 # Increased LR for faster break-out
+BATCH_SIZE = 64 
+LR = 5e-4 
 DEVICE = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
 CHECKPOINT_PATH = "software/training_checkpoint.pth"
+PCA_MODEL_PATH = "software/data/pca_model_128.joblib"
 WANDB_PROJECT = "clap-synth-fpga"
 
 # --- Model Definitions ---
 
+def init_weights(m):
+    if isinstance(m, nn.Linear):
+        w = m.weight.data.cpu()
+        nn.init.orthogonal_(w)
+        m.weight.data.copy_(w)
+        if m.bias is not None:
+            nn.init.constant_(m.bias, 0)
+
 class Mapper(nn.Module):
-    def __init__(self, input_dim=512, output_dim=52): 
+    def __init__(self, input_dim=128, output_dim=75): 
         super().__init__()
-        # Significantly increased capacity: 4 layers, wider units
         self.net = nn.Sequential(
             nn.Linear(input_dim, 1024),
             nn.LayerNorm(1024),
@@ -45,6 +54,47 @@ class Mapper(nn.Module):
     def forward(self, x):
         return self.net(x)
 
+def save_checkpoint(mapper, optimizer, stage, step, path):
+    state = {
+        'mapper_state_dict': mapper.state_dict(),
+        'optimizer_state_dict': optimizer.state_dict(),
+        'stage': stage,
+        'step': step
+    }
+    torch.save(state, path)
+
+def load_checkpoint(mapper, optimizer, path):
+    if os.path.exists(path):
+        print(f"Loading checkpoint from {path}...")
+        checkpoint = torch.load(path, map_location=DEVICE)
+        try:
+            mapper.load_state_dict(checkpoint['mapper_state_dict'])
+            optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+            return checkpoint.get('stage', 1), checkpoint.get('step', 0)
+        except:
+            return 1, 0
+    return 1, 0
+
+def setup_esc50():
+    data_dir = "software/data/esc50"
+    if not os.path.exists(data_dir):
+        os.makedirs(data_dir)
+        os.system(f"git clone https://github.com/karolpiczak/ESC-50.git {data_dir}")
+    csv_path = os.path.join(data_dir, "meta/esc50.csv")
+    df = pd.read_csv(csv_path)
+    all_files = df['filename'].apply(lambda x: os.path.join(data_dir, "audio", x)).tolist()
+    class_names = df['category'].unique().tolist()
+    return all_files, class_names
+
+def log_audio_to_wandb(target_audio, gen_audio, step, stage, label="Sample"):
+    def norm(x): return x / (torch.max(torch.abs(x)) + 1e-8)
+    wandb.log({
+        f"Audio/{label}_Target": wandb.Audio(norm(target_audio).cpu().numpy(), sample_rate=SR),
+        f"Audio/{label}_Generated": wandb.Audio(norm(gen_audio).detach().cpu().numpy(), sample_rate=SR),
+        "Step": step,
+        "Stage": stage
+    }, commit=False)
+
 def slerp(val, low, high):
     low_norm = low / (torch.norm(low, dim=1, keepdim=True) + 1e-8)
     high_norm = high / (torch.norm(high, dim=1, keepdim=True) + 1e-8)
@@ -55,56 +105,16 @@ def slerp(val, low, high):
                       low)
     return res
 
-def save_checkpoint(mapper, optimizer, phase, step, path):
-    state = {
-        'mapper_state_dict': mapper.state_dict(),
-        'optimizer_state_dict': optimizer.state_dict(),
-        'phase': phase,
-        'step': step
-    }
-    torch.save(state, path)
-
-def load_checkpoint(mapper, optimizer, path):
-    if os.path.exists(path):
-        print(f"Loading checkpoint from {path}...")
-        checkpoint = torch.load(path, map_location=DEVICE)
-        mapper.load_state_dict(checkpoint['mapper_state_dict'])
-        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-        return checkpoint['phase'], checkpoint['step']
-    return 1, 0
-
-def setup_esc50():
-    data_dir = "software/data/esc50"
-    if not os.path.exists(data_dir):
-        os.makedirs(data_dir)
-        print("Downloading ESC-50...")
-        os.system(f"git clone https://github.com/karolpiczak/ESC-50.git {data_dir}")
-    
-    csv_path = os.path.join(data_dir, "meta/esc50.csv")
-    df = pd.read_csv(csv_path)
-    class_to_files = df.groupby('category')['filename'].apply(list).to_dict()
-    for cat in class_to_files:
-        class_to_files[cat] = [os.path.join(data_dir, "audio", f) for f in class_to_files[cat]]
-    
-    all_files = df['filename'].apply(lambda x: os.path.join(data_dir, "audio", x)).tolist()
-    return all_files, class_to_files
-
-def log_audio_to_wandb(target_audio, gen_audio, step, phase, label="Sample"):
-    def norm(x): return x / (torch.max(torch.abs(x)) + 1e-8)
-    
-    wandb.log({
-        f"Audio/{label}_Target": wandb.Audio(norm(target_audio[0]).cpu().numpy(), sample_rate=SR),
-        f"Audio/{label}_Generated": wandb.Audio(norm(gen_audio[0]).detach().cpu().numpy(), sample_rate=SR),
-        "Step": step,
-        "Phase": phase
-    }, commit=False)
-
 def train():
     wandb.init(project=WANDB_PROJECT)
-    print(f"Starting training on {DEVICE} at {SR}Hz...")
     
-    mapper = Mapper().to(DEVICE)
-    synth = DifferentiableFMSynth(sr=SR, duration=DURATION).to(DEVICE)
+    pca = joblib.load(PCA_MODEL_PATH)
+    pca_V = torch.from_numpy(pca.components_).float().to(DEVICE)
+    pca_mean = torch.from_numpy(pca.mean_).float().to(DEVICE)
+    def apply_pca(x): return torch.mm(x - pca_mean, pca_V.T)
+
+    mapper = Mapper(input_dim=128, output_dim=75).to(DEVICE)
+    synth = DifferentiableAdditiveSynth(sr=SR, duration=DURATION).to(DEVICE)
     
     print("Loading CLAP model...")
     clap_model = laion_clap.CLAP_Module(enable_fusion=False, amodel='HTSAT-tiny')
@@ -116,172 +126,110 @@ def train():
     resample_48k = torchaudio.transforms.Resample(SR, 48000).to(DEVICE)
     optimizer = optim.Adam(mapper.parameters(), lr=LR)
 
-    current_phase, start_step = load_checkpoint(mapper, optimizer, CHECKPOINT_PATH)
-    
-    all_files, class_to_files = setup_esc50()
-    class_names = list(class_to_files.keys())
+    current_stage, start_step = load_checkpoint(mapper, optimizer, CHECKPOINT_PATH)
+    if start_step == 0 and current_stage == 1:
+        mapper.apply(init_weights)
 
-    embed_cache_path = "software/data/esc50_embeds_v6_filtered.pth"
-    CONSISTENCY_THRESHOLD = 0.25 
+    # --- STAGE 1: Extended Physics Inversion (10,000 steps) ---
+    stage_1_steps = 10000
+    BAKED_DATA_PATH = "software/data/physics_grounding_data.pth"
 
-    if os.path.exists(embed_cache_path):
-        print("Loading filtered incremental embedding cache...")
-        cache = torch.load(embed_cache_path, map_location=DEVICE)
-    else:
-        cache = {'audio_embeds': [], 'text_embeds': [], 'file_to_audio': {}, 'class_to_text_embed': {}, 'processed_files': set(), 'similarities': []}
-        print("Generating filtered dual-modal incremental embedding cache...")
+    if current_stage == 1:
+        print(f"\n--- Stage 1: Additive Physics Inversion ---")
+        
+        if os.path.exists(BAKED_DATA_PATH):
+            print(f"Loading pre-baked grounding data from {BAKED_DATA_PATH}...")
+            baked = torch.load(BAKED_DATA_PATH, map_location=DEVICE)
+            baked_embeddings = baked['embeddings'].to(DEVICE)
+            baked_params = baked['params'].to(DEVICE)
+            use_baked = True
+        else:
+            print("No baked data found. Running in SLOW LIVE MODE. Run 'python3 software/bake_physics_data.py' first for speed.")
+            use_baked = False
 
-    files_to_process = [f for f in all_files if f not in cache['processed_files']]
-    if files_to_process:
-        meta_df = pd.read_csv("software/data/esc50/meta/esc50.csv")
-        with torch.no_grad():
-            for cat in tqdm(class_names, desc="Text Encoding"):
-                prompt = f"A recording of the sound of {cat}"
-                t_emb = clap_model.get_text_embedding([prompt], use_tensor=True)
-                cache['class_to_text_embed'][cat] = t_emb.cpu()
-
-            for i, f in enumerate(tqdm(files_to_process, desc="Audio Filtering")):
-                audio, orig_sr = torchaudio.load(f)
-                audio_mono = audio.mean(0, keepdim=True)
-                audio_48k = torchaudio.transforms.Resample(orig_sr, 48000)(audio_mono)
-                a_emb = clap_model.get_audio_embedding_from_data(x=audio_48k, use_tensor=True)
-                
-                fname = os.path.basename(f)
-                cat = meta_df.query(f"filename == '{fname}'")['category'].iloc[0]
-                t_emb = cache['class_to_text_embed'][cat]
-                
-                sim = torch.nn.functional.cosine_similarity(a_emb.cpu(), t_emb, dim=1).item()
-                cache['similarities'].append(sim)
-                
-                audio_16k = torchaudio.transforms.Resample(orig_sr, SR)(audio_mono)
-                cache['file_to_audio'][f] = audio_16k.cpu()
-                cache['audio_embeds'].append(a_emb.cpu())
-                cache['text_embeds'].append(t_emb.cpu())
-                cache['processed_files'].add(f)
-                
-                if (i + 1) % 100 == 0:
-                    torch.save(cache, embed_cache_path)
-        torch.save(cache, embed_cache_path)
-
-    sims = np.array(cache['similarities'])
-    mask = sims > CONSISTENCY_THRESHOLD
-    audio_embeds = torch.cat(cache['audio_embeds'], dim=0)[mask].to(DEVICE)
-    text_embeds = torch.cat(cache['text_embeds'], dim=0)[mask].to(DEVICE)
-    file_to_audio = cache['file_to_audio']
-    print(f"Using {len(audio_embeds)} high-confidence clips for training (T={CONSISTENCY_THRESHOLD})")
-
-    # --- Phase 1: Generative Dual-Modal Grounding ---
-    phase_1_steps = 2000
-    if current_phase == 1:
-        print(f"\n--- Phase 1: Generative Grounding ({phase_1_steps} steps) ---")
         mapper.train()
-        pbar = tqdm(range(start_step, phase_1_steps), desc="Phase 1")
+        pbar = tqdm(range(start_step, stage_1_steps), desc="Stage 1")
         for step in pbar:
-            idx = np.random.randint(0, len(audio_embeds), BATCH_SIZE)
-            
-            # Input is the TEXT embedding
-            input_embed = text_embeds[idx]
-            
-            # Augmentation: Add small Gaussian noise to the embeddings
-            noise = torch.randn_like(input_embed) * 0.05
-            input_embed_aug = input_embed + noise
-            
-            target_audio_embed = audio_embeds[idx]
+            if use_baked:
+                idx = torch.randint(0, len(baked_embeddings), (BATCH_SIZE,))
+                input_embed_pca = apply_pca(baked_embeddings[idx])
+                target_params = baked_params[idx]
+            else:
+                target_params = torch.rand(BATCH_SIZE, 75).to(DEVICE)
+                f0 = np.exp(np.random.uniform(np.log(50), np.log(1000)))
+                with torch.no_grad():
+                    audio = synth(target_params, f0=f0)
+                    audio = audio / (torch.max(torch.abs(audio), dim=1, keepdim=True)[0] + 1e-8)
+                    audio_48k = resample_48k(audio)
+                    audio_embed_raw = clap_model.get_audio_embedding_from_data(x=audio_48k, use_tensor=True)
+                    input_embed_pca = apply_pca(audio_embed_raw)
             
             optimizer.zero_grad()
-            predicted_params = mapper(input_embed_aug)
-            gen_audio = synth(predicted_params, f0=110.0)
+            predicted_params = mapper(input_embed_pca)
+            loss_mse = nn.MSELoss()(predicted_params, target_params)
+            diversity_loss = -predicted_params.std(dim=0).mean()
             
-            gen_audio_48k = resample_48k(gen_audio)
-            gen_embed = clap_model.get_audio_embedding_from_data(x=gen_audio_48k, use_tensor=True)
-            
-            # Generative Minimum Loss
-            loss_audio = clap_loss_fn(target_audio_embed, gen_embed)
-            loss_text = clap_loss_fn(input_embed, gen_embed)
-            loss = torch.min(loss_audio, loss_text).mean()
-            
-            # Temporal Smoothness (Increased weight to 0.1)
-            smoothness_reg = torch.abs(gen_audio[:, 1:] - gen_audio[:, :-1]).mean()
-            
-            total_loss = loss + (smoothness_reg * 0.1)
-            
+            total_loss = loss_mse + (diversity_loss * 0.2)
             total_loss.backward()
             optimizer.step()
             
+            with torch.no_grad():
+                pred_std = predicted_params.std(dim=0).mean()
+
+            pbar.set_postfix(mse=f"{loss_mse.item():.4f}", std=f"{pred_std.item():.4f}")
             wandb.log({
-                "Phase": 1, 
-                "Loss/Semantic_Min": loss.item(),
-                "Loss/Smoothness": smoothness_reg.item(),
-                "Loss/Total": total_loss.item()
+                "Stage": 1, "Loss/Param_MSE": loss_mse.item(), "Diagnostic/Prediction_STD": pred_std.item()
             })
             
-            if step % 200 == 0:
-                log_audio_to_wandb(torch.zeros(1, int(SR*DURATION)), gen_audio[0:1], step, 1)
-
-            if (step + 1) % 100 == 0:
+            if step % 500 == 0:
+                with torch.no_grad():
+                    gen_audio = synth(predicted_params[0:1], f0=110.0)
+                    log_audio_to_wandb(torch.zeros(16000), gen_audio[0], step, 1, label="Stage1_Inversion")
+            
+            if (step + 1) % 500 == 0:
                 save_checkpoint(mapper, optimizer, 1, step + 1, CHECKPOINT_PATH)
-        
+
         save_checkpoint(mapper, optimizer, 2, 0, CHECKPOINT_PATH)
-        torch.save(mapper.state_dict(), "software/mapper_grounded.pth")
-        current_phase = 2
+        current_stage = 2
         start_step = 0
 
-    # --- Phase 2: Leaf Interpolation ---
-    phase_2_steps = 3000
-    if current_phase == 2:
-        print(f"\n--- Phase 2: Leaf Interpolation ({phase_2_steps} steps) ---")
+    # --- STAGE 2: Semantic Alignment ---
+    stage_2_steps = 5000
+    if current_stage == 2:
+        print(f"\n--- Stage 2: Additive Semantic Alignment ---")
+        embed_cache_path = "software/data/esc50_embeds_v6_filtered.pth"
+        cache = torch.load(embed_cache_path, map_location=DEVICE)
+        audio_embeds_raw = torch.cat(cache['audio_embeds'], dim=0).to(DEVICE)
+        text_embeds_raw = torch.cat(cache['text_embeds'], dim=0).to(DEVICE)
+        
         mapper.train()
-        pbar = tqdm(range(start_step, phase_2_steps), desc="Phase 2")
-        
-        meta_df = pd.read_csv("software/data/esc50/meta/esc50.csv")
-        # Ensure we only use high-confidence indices for interpolation
-        high_conf_indices = np.where(sims > CONSISTENCY_THRESHOLD)[0]
-        meta_df_filtered = meta_df.iloc[high_conf_indices]
-        class_to_indices = meta_df_filtered.groupby('category').indices
-        
+        pbar = tqdm(range(start_step, stage_2_steps), desc="Stage 2")
         for step in pbar:
-            cat = np.random.choice(class_names)
-            # Some classes might have been entirely filtered out
-            if cat not in class_to_indices or len(class_to_indices[cat]) < 2:
-                continue
-                
-            indices = class_to_indices[cat]
-            idx1, idx2 = np.random.choice(indices, 2, replace=False)
+            use_text = (step % 2 == 0)
+            idx = np.random.randint(0, len(audio_embeds_raw), BATCH_SIZE)
+            target_embed_raw = text_embeds_raw[idx] if use_text else audio_embeds_raw[idx]
             
-            emb_a1 = audio_embeds[np.where(high_conf_indices == idx1)[0][0]].unsqueeze(0).repeat(BATCH_SIZE, 1)
-            emb_a2 = audio_embeds[np.where(high_conf_indices == idx2)[0][0]].unsqueeze(0).repeat(BATCH_SIZE, 1)
-            emb_text = cache['class_to_text_embed'][cat].to(DEVICE).repeat(BATCH_SIZE, 1)
+            input_pca = apply_pca(target_embed_raw)
+            input_pca = input_pca + torch.randn_like(input_pca) * 0.02
             
-            alpha = torch.rand(BATCH_SIZE, 1).to(DEVICE)
-            target_audio_embed = slerp(alpha, emb_a1, emb_a2)
-            
+            f0 = 110.0
             optimizer.zero_grad()
-            # Augment text input for Phase 2 as well
-            input_noise = torch.randn_like(emb_text) * 0.05
-            predicted_params = mapper(emb_text + input_noise) 
-            gen_audio = synth(predicted_params, f0=110.0)
-            
+            predicted_params = mapper(input_pca)
+            gen_audio = synth(predicted_params, f0=f0)
             gen_audio_48k = resample_48k(gen_audio)
-            gen_embed = clap_model.get_audio_embedding_from_data(x=gen_audio_48k, use_tensor=True)
+            gen_embed_raw = clap_model.get_audio_embedding_from_data(x=gen_audio_48k, use_tensor=True)
             
-            loss_audio = clap_loss_fn(target_audio_embed, gen_embed)
-            loss_text = clap_loss_fn(emb_text, gen_embed)
-            loss = torch.min(loss_audio, loss_text).mean()
-            
-            smoothness_reg = torch.abs(gen_audio[:, 1:] - gen_audio[:, :-1]).mean()
-            total_loss = loss + (smoothness_reg * 0.1)
+            loss = clap_loss_fn(target_embed_raw, gen_embed_raw)
+            total_loss = loss + (torch.abs(gen_audio[:, 1:] - gen_audio[:, :-1]).mean() * 0.05)
             
             total_loss.backward()
             optimizer.step()
             
-            wandb.log({
-                "Phase": 2, 
-                "Loss/Total": total_loss.item(),
-                "Loss/Audio_Interp": loss_audio.item(),
-                "Loss/Text_Alignment": loss_text.item()
-            })
-
-            if (step + 1) % 100 == 0:
+            mode_str = "Text" if use_text else "Audio"
+            wandb.log({"Stage": 2, f"Loss/Semantic_{mode_str}": loss.item(), "Loss/Total": total_loss.item()})
+            if step % 250 == 0:
+                log_audio_to_wandb(torch.zeros(int(SR*DURATION)), gen_audio[0], step, 2, label=f"Stage2_{mode_str}")
+            if (step + 1) % 250 == 0:
                 save_checkpoint(mapper, optimizer, 2, step + 1, CHECKPOINT_PATH)
 
     torch.save(mapper.state_dict(), "software/mapper_final.pth")
