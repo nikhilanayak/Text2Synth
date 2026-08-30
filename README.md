@@ -17,6 +17,24 @@ make setup
 ```
 This will create a virtual environment, install all dependencies, and initialize data folders.
 
+### CTAG paper reproduction
+
+The reference-compatible reproduction of *Creative Text-to-Audio Generation
+via Synthesizer Programming* lives in [`ctag-repro/`](ctag-repro/). It includes
+the official CLAP checkpoint downloader, SynthAX/LES search pipeline, tests,
+reproducibility metadata, and a Google Colab bootstrap.
+
+```bash
+cd ctag-repro
+python3.11 -m venv .venv
+source .venv/bin/activate
+python -m pip install -e '.[paper]'
+ctag setup --download --strict
+ctag generate --profile smoke --prompt "train horn"
+```
+
+For a GPU runtime, follow [`ctag-repro/COLAB.md`](ctag-repro/COLAB.md).
+
 ### 3. Weights & Biases
 Login to W&B to track your training:
 ```bash

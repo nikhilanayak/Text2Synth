@@ -1,0 +1,255 @@
+"""Lazy-loaded JAX/PyTorch backend matching the released CTAG implementation."""
+
+from __future__ import annotations
+
+from collections.abc import Mapping
+from pathlib import Path
+from typing import Any, Dict, Iterable, Tuple
+
+import numpy as np
+
+from .config import RunConfig
+
+
+class MissingPaperDependencies(RuntimeError):
+    """Raised when the optional paper runtime has not been installed."""
+
+
+def _paper_imports() -> Dict[str, Any]:
+    try:
+        import evosax
+        import flax
+        import jax
+        import jax.numpy as jnp
+        import laion_clap
+        import torch
+        from synthax.config import SynthConfig
+        from synthax.synth import Voice
+    except (ImportError, AttributeError) as exc:
+        raise MissingPaperDependencies(
+            "The reference ML stack is unavailable. Install it with "
+            "`python -m pip install -e '.[paper]'`."
+        ) from exc
+    return {
+        "evosax": evosax,
+        "flax": flax,
+        "jax": jax,
+        "jnp": jnp,
+        "laion_clap": laion_clap,
+        "torch": torch,
+        "SynthConfig": SynthConfig,
+        "Voice": Voice,
+    }
+
+
+class JAXKeyStream:
+    """Stateful key splitting identical to the authors' PRNGKey helper."""
+
+    def __init__(self, seed: int) -> None:
+        deps = _paper_imports()
+        self._jax = deps["jax"]
+        self._key = self._jax.random.PRNGKey(seed)
+
+    def split(self) -> Any:
+        self._key, subkey = self._jax.random.split(self._key)
+        return subkey
+
+
+class CLAPEncoder:
+    """Combined LAION-CLAP text/audio encoder from the paper checkpoint."""
+
+    embedding_size = 512
+
+    def __init__(self, checkpoint: Path, device: str = "cpu") -> None:
+        deps = _paper_imports()
+        self._torch = deps["torch"]
+        self.device = device
+        checkpoint = Path(checkpoint)
+        if not checkpoint.is_file():
+            raise FileNotFoundError(
+                f"CLAP checkpoint not found: {checkpoint}. Run `ctag setup --download`."
+            )
+        self.model = deps["laion_clap"].CLAP_Module(
+            enable_fusion=False,
+            amodel="HTSAT-tiny",
+            tmodel="roberta",
+            device=device,
+        )
+        state = self._torch.load(str(checkpoint), map_location=device)
+        state_dict = (
+            state["state_dict"]
+            if isinstance(state, dict) and "state_dict" in state
+            else state
+        )
+        first_key = next(iter(state_dict))
+        if first_key.startswith("module"):
+            state_dict = {key[7:]: value for key, value in state_dict.items()}
+        self.model.model.load_state_dict(state_dict)
+        self.model.model.eval()
+
+    def embed_text(self, texts: Iterable[str]) -> np.ndarray:
+        values = list(texts)
+        if not values:
+            raise ValueError("at least one text prompt is required")
+        # laion-clap 1.1.4 squeezes a one-item token batch to one dimension,
+        # which RoBERTa rejects. The authors therefore required >=2 prompts.
+        # Duplicating only at this adapter boundary yields the same first-row
+        # embedding while preserving a natural one-prompt public interface.
+        single = len(values) == 1
+        model_values = values * 2 if single else values
+        with self._torch.inference_mode():
+            embedded = self.model.get_text_embedding(model_values, use_tensor=True)
+        if hasattr(embedded, "detach"):
+            embedded = embedded.detach().cpu().numpy()
+        result = np.asarray(embedded, dtype=np.float32)
+        return result[:1] if single else result
+
+    def embed_audio(self, audio: np.ndarray, sample_rate: int) -> np.ndarray:
+        if sample_rate != 48_000:
+            raise ValueError("the paper CLAP checkpoint requires 48 kHz audio")
+        # JAX's NumPy view can be read-only; an owned array avoids PyTorch's
+        # undefined-behavior warning without altering values.
+        owned_audio = np.array(audio, dtype=np.float32, copy=True)
+        tensor = self._torch.as_tensor(
+            owned_audio, dtype=self._torch.float32, device=self.device
+        )
+        tensor = self._torch.atleast_2d(tensor)
+        with self._torch.inference_mode():
+            embedded = self.model.get_audio_embedding_from_data(
+                tensor, use_tensor=True
+            )
+        return np.asarray(embedded.detach().cpu(), dtype=np.float32)
+
+
+def _to_builtin(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {str(key): _to_builtin(item) for key, item in value.items()}
+    if hasattr(value, "tolist"):
+        return value.tolist()
+    if isinstance(value, (tuple, list)):
+        return [_to_builtin(item) for item in value]
+    return value
+
+
+class SynthAXVoice:
+    """Reference Voice synth with the paper's exact Flax parameter layout."""
+
+    parameter_count = 78
+
+    def __init__(self, config: RunConfig, key_stream: JAXKeyStream) -> None:
+        deps = _paper_imports()
+        self._jax = deps["jax"]
+        self._jnp = deps["jnp"]
+        self._flax = deps["flax"]
+        self.sample_rate = config.sample_rate
+        self.num_samples = config.num_samples
+        synth_config = deps["SynthConfig"](
+            batch_size=config.population_size,
+            sample_rate=config.sample_rate,
+            buffer_size_seconds=config.duration_seconds,
+            control_rate=config.control_rate,
+            eps=1e-6,
+        )
+        single_config = deps["SynthConfig"](
+            batch_size=1,
+            sample_rate=config.sample_rate,
+            buffer_size_seconds=config.duration_seconds,
+            control_rate=config.control_rate,
+            eps=1e-6,
+        )
+        self._synth = deps["Voice"](config=synth_config)
+        self._single_synth = deps["Voice"](config=single_config)
+        self._apply = self._jax.jit(self._synth.apply)
+        self._single_apply = self._jax.jit(self._single_synth.apply)
+
+        # These two setup calls deliberately consume keys in the same order as
+        # the reference program before any per-prompt run begins.
+        self._setup_population = self._synth.init(key_stream.split())
+        single_template = self._single_synth.init(key_stream.split())
+        flat_single = self._flax.traverse_util.flatten_dict(single_template)
+        unbatched = self._flax.traverse_util.unflatten_dict(
+            {
+                key: np.asarray(value).squeeze()
+                for key, value in flat_single.items()
+            }
+        )
+        self._reshaper = deps["evosax"].ParameterReshaper(unbatched)
+        self._reshape = self._jax.jit(self._reshaper.reshape)
+        if int(self._reshaper.total_params) != self.parameter_count:
+            raise RuntimeError(
+                f"expected 78 Voice parameters, found {self._reshaper.total_params}"
+            )
+
+    def initialize(self, key_stream: JAXKeyStream) -> Any:
+        params = self._synth.init(key_stream.split())
+        flat = self._flax.traverse_util.flatten_dict(params)
+        return self._jnp.concatenate(
+            [value.reshape(self._synth.batch_size, -1) for value in flat.values()],
+            axis=1,
+        )
+
+    def render(self, flat_parameters: Any) -> np.ndarray:
+        shaped = self._reshape(flat_parameters)
+        return np.asarray(self._apply(shaped), dtype=np.float32)
+
+    def render_one(self, flat_parameters: Any) -> Tuple[np.ndarray, Mapping[str, Any]]:
+        flat_parameters = self._jnp.asarray(flat_parameters)
+        if flat_parameters.ndim == 1:
+            flat_parameters = self._jnp.expand_dims(flat_parameters, axis=0)
+        shaped = self._reshape(flat_parameters)
+        audio = np.asarray(self._single_apply(shaped), dtype=np.float32).squeeze(0)
+        return audio, _to_builtin(shaped)
+
+
+class EvosaxLES:
+    """Learned Evolution Strategy configured with the released hyperparameters."""
+
+    def __init__(self, config: RunConfig) -> None:
+        deps = _paper_imports()
+        self._jnp = deps["jnp"]
+        self._strategy = deps["evosax"].strategies.LES(
+            popsize=config.population_size,
+            num_dims=SynthAXVoice.parameter_count,
+            mean_decay=config.mean_decay,
+        )
+        self._params = self._strategy.default_params.replace(
+            sigma_init=config.sigma_init,
+            init_min=0.0,
+            init_max=1.0,
+            clip_min=0.0,
+            clip_max=1.0,
+        )
+        self._state = None
+
+    def initialize(self, key_stream: JAXKeyStream, initial_population: Any) -> None:
+        self._state = self._strategy.initialize(
+            key_stream.split(), self._params, initial_population
+        )
+
+    def ask(self, key_stream: JAXKeyStream) -> Any:
+        candidates, self._state = self._strategy.ask(
+            key_stream.split(), self._state, self._params
+        )
+        return candidates
+
+    def tell(self, candidates: Any, fitness: np.ndarray) -> None:
+        self._state = self._strategy.tell(
+            candidates, self._jnp.asarray(fitness), self._state, self._params
+        )
+
+    @property
+    def best_member(self) -> Any:
+        return self._state.best_member
+
+    @property
+    def best_fitness(self) -> float:
+        return float(self._state.best_fitness)
+
+
+def build_paper_components(config: RunConfig) -> Tuple[Any, Any, Any, Any]:
+    """Build encoder, synth, strategy factory, and shared key stream."""
+
+    keys = JAXKeyStream(config.seed)
+    encoder = CLAPEncoder(Path(config.checkpoint), config.device)
+    synth = SynthAXVoice(config, keys)
+    return encoder, synth, lambda: EvosaxLES(config), keys

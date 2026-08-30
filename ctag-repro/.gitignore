@@ -1,0 +1,19 @@
+.DS_Store
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+build/
+dist/
+*.egg-info/
+
+# Large external model files
+checkpoints/*
+!checkpoints/README.md
+
+# Generated CTAG artifacts
+runs/
+profiles/
+reference-results/

@@ -1,0 +1,14 @@
+sample_rate: 48000
+control_rate: 480
+duration_seconds: 2.0
+population_size: 2
+iterations: 2
+runs_per_prompt: 1
+seed: 42
+sigma_init: 0.2693048095331496
+mean_decay: 0.0
+device: cpu
+checkpoint: checkpoints/630k-audioset-best.pt
+output_root: runs
+log_every: 1
+profile: smoke

@@ -38,6 +38,7 @@ project currently stands.
   (M1: 2/5 · M2: 0/4 · M3: 1/4 · M4: 0/3 · M5: 0/4)
 - **Key Decisions Pending:** exact FM parameter list (aiming for 52 params: 48 FM + 4 Noise).
 - **How to build/run RTL:** `make` or `make mac_pe`. Sim = Icarus Verilog.
+- **Reference implementation:** `ctag-repro/` contains the verified ICML 2024 CTAG reproduction and Colab bootstrap.
 
 ---
 
@@ -86,6 +87,7 @@ project currently stands.
 | Diff. Synth | `software/diff_fm.py` | verified |
 | Loss Functions | `software/loss.py` | verified |
 | Clean Utility | `software/clean_cache.py` | exists |
+| CTAG reproduction | `ctag-repro/` | verified; 18 unit tests pass |
 
 ---
 
@@ -106,3 +108,4 @@ project currently stands.
 - 2026-05-31 — Completed **M1.1**: Implemented `software/diff_fm.py` (Differentiable FM Synth).
 - 2026-05-31 — Completed `software/loss.py` (DDSP + CLAP Loss functions).
 - 2026-05-31 — Focused training on **ESC-50 dataset**; overhauled `software/train_fm.py` to use audio embeddings and intra-class interpolation.
+- 2026-08-30 — Added the reference-compatible CTAG paper reproduction under `ctag-repro/`, including a Colab bootstrap; no roadmap checklist state changed.
