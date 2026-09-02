@@ -96,3 +96,6 @@ Box legend: `[ ]` not started · `[~]` in progress · `[x]` done · `[-]` skippe
   the portable fixed-point SynthAX voice, interactive patch bank/UI, framed host
   audio transport, generic Cyclone IV shell, golden models, documentation, and
   regression/CI coverage. Tonal diagnostic correlation is 0.9754–0.9990.
+- 2026-09-02 — Added direct local rendering of native CTAG `patch.yaml`
+  artifacts through the FPGA fixed-point model and generated a verified
+  48 kHz train-horn audition from the existing paper-budget search result.

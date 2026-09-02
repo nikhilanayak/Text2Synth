@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "software" / "rtl_synth"))
@@ -12,6 +13,7 @@ sys.path.insert(0, str(ROOT / "software" / "rtl_synth"))
 from fixed_model import load_preset, render
 from protocol import FRAME_SAMPLES, FrameParser, encode_audio_frame
 from export_presets import CONTRACT_HASH, load_parameters
+from render_ctag_patch import flatten_sorted_pytree, load_patch
 
 
 def test_contract_and_generated_presets_match():
@@ -71,9 +73,16 @@ def test_preset_export_accepts_lists_and_rejects_stale_contract(tmp_path):
         "prompt": "old", "parameters": [0.5] * 78,
         "parameter_contract_hash": "not-" + CONTRACT_HASH,
     }))
-    import pytest
     with pytest.raises(ValueError, match="incompatible"):
         load_parameters(stale)
+
+
+def test_native_ctag_patch_flattens_in_render_order(tmp_path):
+    patch = tmp_path / "patch.yaml"
+    patch.write_text("params:\n  b: [0.75]\n  a: [0.25, 0.5]\n")
+    assert flatten_sorted_pytree({"params": {"b": [0.75], "a": [0.25, 0.5]}}) == [0.25, 0.5, 0.75]
+    with pytest.raises(ValueError, match="78 parameters"):
+        load_patch(patch)
 
 
 def test_rtl_voice_tracks_fixed_point_oracle():

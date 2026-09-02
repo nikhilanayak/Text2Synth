@@ -87,6 +87,13 @@ inputs repeat the last patch. Inputs must use contract
 `synthax-voice-render-flat-78-v2`, hash
 `4a07c1ca91590e8a6f0b781057928c75c383b3fdad8346fe2d67dab7d4e2cac7`.
 
+To audition a native CTAG `patch.yaml` through the FPGA fixed-point model:
+
+```bash
+python3 software/rtl_synth/render_ctag_patch.py path/to/patch.yaml \
+  --output local-output/patch-fpga.wav
+```
+
 The future neural engine does not need to know the patch RAM implementation.
 It writes `external_param_address`, `external_param_data`, and
 `external_param_we` for indices 0 through 77, then pulses
