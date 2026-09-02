@@ -87,7 +87,7 @@ project currently stands.
 | Diff. Synth | `software/diff_fm.py` | verified |
 | Loss Functions | `software/loss.py` | verified |
 | Clean Utility | `software/clean_cache.py` | exists |
-| CTAG reproduction | `ctag-repro/` | Python 3.9 reference + Python 3.13 Colab matrix verified; GPU doctor added |
+| CTAG reproduction | `ctag-repro/` | Search reproduction plus resumable direct-model training and ONNX export |
 
 ---
 
@@ -110,3 +110,4 @@ project currently stands.
 - 2026-05-31 — Focused training on **ESC-50 dataset**; overhauled `software/train_fm.py` to use audio embeddings and intra-class interpolation.
 - 2026-08-30 — Added the reference-compatible CTAG paper reproduction under `ctag-repro/`, including a Colab bootstrap; no roadmap checklist state changed.
 - 2026-09-02 — Modernized the CTAG backend for the latest Colab Python 3.13/JAX 0.11/PyTorch 2.11 GPU runtime and added a runtime doctor plus runnable notebook; no roadmap checklist state changed.
+- 2026-09-02 — Added resumable CTAG-to-MLP distillation, strict no-search prompt inference, held-out listening evaluation, and hardware-facing FP32/INT8 ONNX export; no roadmap checklist state changed.

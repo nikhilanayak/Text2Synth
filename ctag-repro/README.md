@@ -1,6 +1,7 @@
 # CTAG reproduction
 
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/nikhilanayak/Synthesizer/blob/main/ctag-repro/CTAG_Colab.ipynb)
+[![Train Direct Model](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/nikhilanayak/Synthesizer/blob/main/ctag-repro/DirectPatch_Train.ipynb)
 
 This repository recreates **Creative Text-to-Audio Generation via Synthesizer
 Programming** (Cherep, Singh, and Shand, ICML 2024). CTAG searches the 78
@@ -8,9 +9,9 @@ interpretable parameters of the SynthAX `Voice` synthesizer and uses LAION-CLAP
 similarity to choose audio that expresses a text prompt.
 
 The current milestone is deliberately ML-first. It provides the reference
-floating-point pipeline, clean component boundaries, deterministic artifacts,
-tests, and performance measurements. Quantization and SystemVerilog will follow
-only after this baseline is verified.
+floating-point pipeline, a distilled live predictor, deterministic artifacts,
+tests, performance measurements, and verified FP32/INT8 ONNX exports.
+SystemVerilog will follow after the trained model clears the listening gate.
 
 ## Method reproduced
 
@@ -95,6 +96,23 @@ Compare two completed runs:
 ctag compare --reference path/to/reference/run-000 \
              --candidate path/to/candidate/run-000
 ```
+
+## Live prompt-to-patch inference
+
+`DirectPatch_Train.ipynb` distills the slow CTAG optimizer into a compact
+eight-head ReLU MLP. Its default output is head zero: one frozen CLAP text
+encoding and one network pass produce the ordered 78-value SynthAX patch with
+no candidate rendering or search. Training is sharded and checkpointed to
+Google Drive, so rerunning the notebook resumes after a Colab disconnect.
+
+```bash
+ctag train-live --profile balanced --workspace /path/to/persistent/workspace
+ctag infer-direct --bundle /path/to/workspace/training/model \
+  --prompt "a deep resonant train horn" --device cuda
+```
+
+See [docs/direct-inference.md](docs/direct-inference.md) for the data contract,
+profiles, optional fixed-eight CLAP reranking, evaluation, and ONNX export.
 
 ## Tests
 

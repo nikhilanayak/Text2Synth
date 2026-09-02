@@ -20,3 +20,4 @@ wandb/
 
 # OS files
 .DS_Store
+:memory:.ses

@@ -17,3 +17,7 @@ checkpoints/*
 runs/
 profiles/
 reference-results/
+direct-output/
+direct-evaluation/
+direct-export/
+direct-workspace/

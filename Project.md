@@ -105,6 +105,12 @@ the later hardware handoff. Its GPU path tracks the latest Colab Python 3.13,
 JAX, and PyTorch runtime while retaining a separate frozen Python 3.9 reference
 environment; it does not change the milestone counts below.
 
+The same package now includes an amortized inference track that creates
+search-derived teachers offline and trains a small eight-head network from the
+512-value CLAP embedding to the exact ordered 78-value patch. Its default live
+path uses head zero without audio reranking or optimization, while its ONNX and
+INT8 exports establish the neural-to-register boundary for later RTL work.
+
 ---
 
 ## 8. Execution Checklist

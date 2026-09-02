@@ -3,6 +3,11 @@
 [Open the runnable notebook in Colab](https://colab.research.google.com/github/nikhilanayak/Synthesizer/blob/main/ctag-repro/CTAG_Colab.ipynb), then select
 **Runtime → Change runtime type → T4 GPU**.
 
+To train the one-pass prompt-to-parameter model instead, open
+[DirectPatch_Train.ipynb](https://colab.research.google.com/github/nikhilanayak/Synthesizer/blob/main/ctag-repro/DirectPatch_Train.ipynb).
+That notebook mounts Drive and resumes all data, optimizer, evaluation, and
+export stages automatically.
+
 This path uses Colab's native Python 3.13 and CUDA wheels. It does not create a
 second Python environment or replace JAX, JAXlib, PyTorch, torchvision, or the
 CUDA plugins. The supported runtime matrix is recorded in

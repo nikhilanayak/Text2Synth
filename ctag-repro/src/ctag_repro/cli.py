@@ -20,6 +20,10 @@ from .pipeline import CTAGPipeline
 from .prompts import load_prompts
 
 
+def _project_root() -> Path:
+    return Path(__file__).resolve().parents[2]
+
+
 def _dependency_status() -> Dict[str, str]:
     result: Dict[str, str] = {}
     for package in (
@@ -203,6 +207,113 @@ def command_compare(args: argparse.Namespace) -> int:
     return 0
 
 
+def _direct_prompts(args: argparse.Namespace, regression: bool = False) -> list[str]:
+    if getattr(args, "prompts_file", None):
+        return load_prompts(Path(args.prompts_file))
+    if getattr(args, "prompt", None):
+        return load_prompts(args.prompt)
+    if regression:
+        evaluation = _project_root() / "data" / "direct-eval-prompts.txt"
+        return load_prompts(evaluation if evaluation.exists() else _project_root() / "data" / "regression-prompts.txt")
+    from .distill import full_training_prompts
+
+    workspace = Path(getattr(args, "workspace", "direct-workspace"))
+    return full_training_prompts(_project_root(), workspace / "vocabulary")
+
+
+def command_build_distillation_data(args: argparse.Namespace) -> int:
+    from .distill import build_distillation_data, default_training_prompts, get_profile
+
+    result = build_distillation_data(
+        Path(args.workspace),
+        Path(args.checkpoint),
+        get_profile(args.profile),
+        _direct_prompts(args),
+        args.device,
+        args.seed,
+        progress=lambda message: print(message, file=sys.stderr, flush=True),
+        search_prompts={
+            prompt.casefold() for prompt in default_training_prompts(_project_root())
+        },
+    )
+    print(json.dumps(result, indent=2, sort_keys=True))
+    return 0
+
+
+def command_train_direct(args: argparse.Namespace) -> int:
+    from .direct_training import train_direct
+    from .distill import get_profile
+
+    result = train_direct(
+        Path(args.workspace),
+        Path(args.output or Path(args.workspace) / "training"),
+        get_profile(args.profile),
+        args.device,
+        resume=not args.no_resume,
+        progress=lambda message: print(message, file=sys.stderr, flush=True),
+    )
+    print(json.dumps(result, indent=2, sort_keys=True))
+    return 0
+
+
+def command_train_live(args: argparse.Namespace) -> int:
+    from .direct_training import run_live_training
+    from .distill import default_training_prompts, get_profile
+
+    result = run_live_training(
+        Path(args.workspace),
+        Path(args.checkpoint),
+        get_profile(args.profile),
+        _direct_prompts(args),
+        args.device,
+        progress=lambda message: print(message, file=sys.stderr, flush=True),
+        search_prompts={
+            prompt.casefold() for prompt in default_training_prompts(_project_root())
+        },
+    )
+    print(json.dumps(result, indent=2, sort_keys=True))
+    return 0
+
+
+def command_infer_direct(args: argparse.Namespace) -> int:
+    from .direct_training import infer_direct
+
+    payload = infer_direct(
+        Path(args.bundle),
+        Path(args.checkpoint),
+        args.prompt,
+        Path(args.output),
+        args.device,
+        args.selection,
+        include_variants=args.variants == 8,
+    )
+    print(json.dumps(payload, indent=2, sort_keys=True))
+    return 0
+
+
+def command_evaluate_direct(args: argparse.Namespace) -> int:
+    from .direct_training import evaluate_direct
+
+    payload = evaluate_direct(
+        Path(args.bundle),
+        Path(args.checkpoint),
+        _direct_prompts(args, regression=True),
+        Path(args.output),
+        args.device,
+        rerank=not args.no_rerank,
+    )
+    print(json.dumps(payload, indent=2, sort_keys=True))
+    return 0
+
+
+def command_export_direct(args: argparse.Namespace) -> int:
+    from .direct_training import export_direct
+
+    payload = export_direct(Path(args.bundle), Path(args.output), args.quantize)
+    print(json.dumps(payload, indent=2, sort_keys=True))
+    return 0
+
+
 def _add_run_arguments(parser: argparse.ArgumentParser) -> None:
     prompts = parser.add_mutually_exclusive_group(required=True)
     prompts.add_argument("--prompt", action="append", help="prompt text; repeat as needed")
@@ -264,6 +375,66 @@ def build_parser() -> argparse.ArgumentParser:
     compare.add_argument("--reference", required=True)
     compare.add_argument("--candidate", required=True)
     compare.set_defaults(handler=command_compare)
+
+    def add_direct_runtime(target: argparse.ArgumentParser) -> None:
+        target.add_argument("--checkpoint", default="checkpoints/630k-audioset-best.pt")
+        target.add_argument("--device", choices=("cpu", "cuda", "mps"), default="cuda")
+
+    def add_training_prompts(target: argparse.ArgumentParser) -> None:
+        prompts = target.add_mutually_exclusive_group()
+        prompts.add_argument("--prompt", action="append")
+        prompts.add_argument("--prompts-file")
+
+    build_data = subparsers.add_parser(
+        "build-distillation-data", help="generate resumable random and CTAG teacher data"
+    )
+    build_data.add_argument("--workspace", required=True)
+    build_data.add_argument("--profile", choices=("smoke", "balanced", "quality"), default="balanced")
+    build_data.add_argument("--seed", type=int, default=0)
+    build_data.add_argument("--resume", action="store_true", help="accepted for explicit restart-safe scripts; resume is always safe")
+    add_training_prompts(build_data)
+    add_direct_runtime(build_data)
+    build_data.set_defaults(handler=command_build_distillation_data)
+
+    train = subparsers.add_parser("train-direct", help="train the direct patch model")
+    train.add_argument("--workspace", required=True)
+    train.add_argument("--output")
+    train.add_argument("--profile", choices=("smoke", "balanced", "quality"), default="balanced")
+    train.add_argument("--device", choices=("cpu", "cuda", "mps"), default="cuda")
+    train.add_argument("--no-resume", action="store_true")
+    train.add_argument("--resume", dest="no_resume", action="store_false", default=False)
+    train.set_defaults(handler=command_train_direct)
+
+    live = subparsers.add_parser("train-live", help="run the complete resumable distillation workflow")
+    live.add_argument("--workspace", required=True)
+    live.add_argument("--profile", choices=("smoke", "balanced", "quality"), default="balanced")
+    live.add_argument("--resume", action="store_true", help="resume completed shards and checkpoints")
+    add_training_prompts(live)
+    add_direct_runtime(live)
+    live.set_defaults(handler=command_train_live)
+
+    infer = subparsers.add_parser("infer-direct", help="predict and render a patch without search")
+    infer.add_argument("--bundle", required=True)
+    infer.add_argument("--prompt", required=True)
+    infer.add_argument("--output", default="direct-output")
+    infer.add_argument("--selection", choices=("direct", "clap"), default="direct")
+    infer.add_argument("--variants", type=int, choices=(1, 8), default=1)
+    add_direct_runtime(infer)
+    infer.set_defaults(handler=command_infer_direct)
+
+    evaluate = subparsers.add_parser("evaluate-direct", help="score direct inference on held-out prompts")
+    evaluate.add_argument("--bundle", required=True)
+    evaluate.add_argument("--prompts-file")
+    evaluate.add_argument("--output", default="direct-evaluation")
+    evaluate.add_argument("--no-rerank", action="store_true")
+    add_direct_runtime(evaluate)
+    evaluate.set_defaults(handler=command_evaluate_direct)
+
+    export = subparsers.add_parser("export-direct", help="export the direct model to ONNX")
+    export.add_argument("--bundle", required=True)
+    export.add_argument("--output", default="direct-export")
+    export.add_argument("--quantize", action="store_true")
+    export.set_defaults(handler=command_export_direct)
     return parser
 
 

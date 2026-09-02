@@ -38,6 +38,11 @@ or follow [`ctag-repro/COLAB.md`](ctag-repro/COLAB.md). It uses Colab's native
 Python 3.13, JAX CUDA plugin, and PyTorch CUDA build without replacing their
 accelerator wheels.
 
+To train a live prompt-to-78-parameter network that replaces inference-time
+search, open the [direct-model training notebook](https://colab.research.google.com/github/nikhilanayak/Synthesizer/blob/main/ctag-repro/DirectPatch_Train.ipynb).
+It persists its dataset and checkpoints to Google Drive and exports an INT8
+hardware-facing ONNX model when training completes.
+
 ### 3. Weights & Biases
 Login to W&B to track your training:
 ```bash

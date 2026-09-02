@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ctag-repro"
-version = "0.2.0"
+version = "0.3.0"
 description = "Reference-compatible reproduction of CTAG text-to-synth programming"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -49,15 +49,24 @@ colab = [
   "ftfy==6.3.1",
   "h5py>=3.12,<4",
   "librosa==0.11.0",
+  "onnx>=1.17,<2",
+  "onnxruntime>=1.20,<2",
   "pandas==2.2.3",
   "progressbar2>=4.5,<5",
   "scikit-learn==1.6.1",
   "scipy==1.16.3",
   "soundfile==0.14.0",
+  "safetensors>=0.5,<1",
   "synthax==0.2.2",
   "torchlibrosa==0.1.0",
   "webdataset==1.0.2",
   "wget==3.2",
+]
+direct = [
+  "onnx>=1.17,<2",
+  "onnxruntime>=1.20,<2",
+  "safetensors>=0.5,<1",
+  "torch>=2,<3",
 ]
 dev = [
   "pytest>=7,<9",

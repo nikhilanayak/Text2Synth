@@ -22,7 +22,8 @@ and the host-specific CPU rather than CUDA wheel tags.
 
 ## Verified behavior
 
-- Core suite: 22 tests pass under both Python 3.9 and Python 3.13. The
+- Fast suite: 36 tests pass under Python 3.13; 31 pass and two optional direct
+  tests skip under the legacy Python 3.9 environment. The
   checkpoint-backed integration test passes separately under both stacks.
   Legacy-library deprecation warnings are expected and do not affect numerical
   results.
@@ -36,6 +37,14 @@ and the host-specific CPU rather than CUDA wheel tags.
 - SynthAX Voice: exactly 78 flattened parameters.
 - Candidate render: `(2, 78)` patches produced finite `(2, 96000)` audio.
 - CLAP: finite, unit-length `(2, 512)` text and audio embeddings.
+- Direct model: eight bounded `(78,)` patch heads from each `(512,)` embedding;
+  strict inference selects head zero without rendering candidates.
+- Distillation: atomic shards resume idempotently; a real 64-patch
+  SynthAX/CLAP corpus, teacher refinement, tiny training/resume, strict render,
+  fixed-eight reranking, and held-out report all completed on the validation
+  host.
+- Export: FP32 ONNX matches PyTorch within `1e-5`; dynamic weight-INT8 ONNX is
+  produced and executed by ONNX Runtime.
 - Independent upstream comparison: initial population, first LES candidate batch,
   and all first-batch audio samples matched exactly; both maximum absolute errors
   were `0.0`.

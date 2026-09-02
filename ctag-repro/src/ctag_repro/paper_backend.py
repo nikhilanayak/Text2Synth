@@ -212,6 +212,20 @@ class SynthAXVoice:
         self._setup_population = self._synth.init(key_stream.split())
         single_template = self._single_synth.init(key_stream.split())
         flat_single = self._flax.traverse_util.flatten_dict(single_template)
+        from .direct import PARAMETER_CONTRACT_HASH, PARAMETER_LAYOUT
+
+        actual_layout = tuple((tuple(key), int(np.asarray(value).size)) for key, value in flat_single.items())
+        if actual_layout != PARAMETER_LAYOUT:
+            import hashlib
+            import json
+
+            actual_hash = hashlib.sha256(
+                json.dumps(actual_layout, separators=(",", ":")).encode()
+            ).hexdigest()
+            raise RuntimeError(
+                "SynthAX parameter order changed: "
+                f"expected {PARAMETER_CONTRACT_HASH}, found {actual_hash}"
+            )
         unbatched = self._flax.traverse_util.unflatten_dict(
             {
                 key: np.asarray(value).squeeze()
