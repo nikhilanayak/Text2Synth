@@ -14,6 +14,7 @@ def test_training_notebook_is_clean_and_contains_complete_workflow():
         "ctag evaluate-direct",
         "LiveDirectSynth",
         "ctag export-direct",
+        "codeload.github.com",
     ):
         assert command in code
     assert all(not cell.get("outputs") for cell in notebook["cells"])
