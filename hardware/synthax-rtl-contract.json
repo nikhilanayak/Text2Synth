@@ -1,0 +1,46 @@
+{
+  "audio": {
+    "host_format": "signed little-endian PCM16 mono",
+    "internal_format": "signed Q1.23",
+    "sample_rate_hz": 48000
+  },
+  "control_rate_hz": 480,
+  "contract": "synthax-voice-render-flat-78-v2",
+  "contract_sha256": "4a07c1ca91590e8a6f0b781057928c75c383b3fdad8346fe2d67dab7d4e2cac7",
+  "live_notes": [60, 64, 67, 72],
+  "parameter_count": 78,
+  "parameter_format": "unsigned Q0.16",
+  "parameter_groups": [
+    {"indices": "0..4", "path": "adsr_1", "fields": ["alpha", "attack", "decay", "release", "sustain"]},
+    {"indices": "5..9", "path": "adsr_2", "fields": ["alpha", "attack", "decay", "release", "sustain"]},
+    {"indices": "10..11", "path": "keyboard", "fields": ["duration", "midi_f0"]},
+    {"indices": "12..19", "path": "lfo_1", "fields": ["frequency", "initial_phase", "mod_depth", "rsaw", "saw", "sin", "sqr", "tri"]},
+    {"indices": "20..24", "path": "lfo_1_amp_adsr", "fields": ["alpha", "attack", "decay", "release", "sustain"]},
+    {"indices": "25..29", "path": "lfo_1_rate_adsr", "fields": ["alpha", "attack", "decay", "release", "sustain"]},
+    {"indices": "30..37", "path": "lfo_2", "fields": ["frequency", "initial_phase", "mod_depth", "rsaw", "saw", "sin", "sqr", "tri"]},
+    {"indices": "38..42", "path": "lfo_2_amp_adsr", "fields": ["alpha", "attack", "decay", "release", "sustain"]},
+    {"indices": "43..47", "path": "lfo_2_rate_adsr", "fields": ["alpha", "attack", "decay", "release", "sustain"]},
+    {"indices": "48..50", "path": "mixer", "fields": ["level[0]", "level[1]", "level[2]"]},
+    {"indices": "51..70", "path": "mod_matrix", "fields": ["mod[0][0]..mod[4][3], row-major"]},
+    {"indices": "71..73", "path": "vco_1", "fields": ["initial_phase", "mod_depth", "tuning"]},
+    {"indices": "74..77", "path": "vco_2", "fields": ["initial_phase", "mod_depth", "shape", "tuning"]}
+  ],
+  "phase_width": 32,
+  "preset_count": 8,
+  "presets": [
+    "sine",
+    "square",
+    "saw",
+    "noise",
+    "pluck",
+    "pad",
+    "vibrato",
+    "mod-sweep"
+  ],
+  "transport": {
+    "crc": "CRC16-CCITT, polynomial 0x1021, initial 0xffff",
+    "frame_samples": 256,
+    "magic": "CTAG",
+    "version": 1
+  }
+}

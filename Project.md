@@ -1,145 +1,94 @@
-# Project Spec: Embedded Neural FM Synthesizer (CLAP-to-FM)
+# Project spec: prompt-to-SynthAX FPGA instrument
 
 **Architect:** Nikhil Nayak
-**Target Applications:** Edge AI · Generative Hardware · Digital Signal Processing · FPGA/RTL
-**Project Type:** High-End Portfolio Piece — **A synthesizer that uses on-chip Neural Inference to design its own internal FM patches.**
+**Target:** a Cyclone IV teaching board, exact model and pin map pending
 
----
+## Goal
 
-## 0. Scope & Intent (read first)
+Recreate *Creative Text-to-Audio Generation via Synthesizer Programming*, then
+turn its synthesizer into a playable hardware instrument. A trained direct model
+eventually replaces search for live prompt-to-patch inference. The hardware
+boundary is deliberately stable: either path emits exactly 78 normalized
+SynthAX parameters.
 
-The **Embedded Neural FM Synthesizer** is a generative instrument where the FPGA handles both the "Decision" (Neural Inference) and the "Synthesis" (DSP).
+The computer retains CLAP text encoding and plays returned audio. The FPGA owns
+patch storage/editing and real-time synthesis. The first bitstream contains
+patches selected before compilation; runtime host patch loading and on-FPGA
+neural inference are later extensions.
 
-- **Host PC Role:** Minimal. It converts a text prompt or audio clip into a fixed **512-D CLAP embedding vector** and sends it to the FPGA.
-- **FPGA Brain (Neural Engine):** An on-chip INT8 MLP Decoder that takes the 512-D vector and predicts **~40-64 FM parameters** (frequencies, envelopes, feedback, etc.).
-- **FPGA Instrument (FM Engine):** A **4-Operator FM Synthesizer** that takes these parameters and generates real-time audio with MIDI polyphony.
+## Fixed hardware behavior
 
-The story: *The FPGA is an autonomous sound designer. It receives a 'concept' (embedding) and internally reconfigures its entire FM synthesis engine to manifest that sound.*
+- Monophonic SynthAX-compatible voice at 48 kHz with a 480 Hz control rate.
+- Four play buttons: MIDI 60, 64, 67, and 72; highest held note wins.
+- One button cycles eight compiled presets.
+- One switch enters edit mode; the four buttons become previous/next parameter
+  and decrease/increase.
+- Eight hexadecimal seven-segment digits show preset or alternating parameter
+  address/value pages.
+- Edits are volatile. Reset restores the ROM image.
+- No audio jack, ADC, codec, or I2S dependency. Framed PCM16 returns to the PC
+  over Intel JTAG UART, with a 3 Mbaud USB-UART fallback.
+- A FIFO and CRC/sequence framing expose transport problems rather than
+  disguising them as synthesis errors.
 
----
+## Parameter and model boundary
 
-## 1. System Overview
+Contract `synthax-voice-render-flat-78-v2` uses unsigned Q0.16 registers in the
+actual sorted JAX PyTree order. Its hash is embedded in software and generated
+preset metadata. A future INT8 neural engine writes register address/data/enable
+and pulses commit; the instrument swaps the complete patch at a control tick.
 
-```
- [ PC / Python ]                              [ ULX3S ECP5-85F FPGA ]
-  "Metallic Bell"                                 +-----------------------------+
-       |                                          |  1. NEURAL ENGINE (INT8)    |
- [ CLAP Encoder ]  ==USB (512-D Vector)==>        |     (Decoder: MLP Inference)|
-       |                                          |           |                 |
-       +------------------------------------------+-----> [ FM PARAM REGISTERS ] |
-                                                  |           |                 |
- [ MIDI Keyboard ] ==MIDI Link==> [MIDI Decoder]--|--> 2. FM SYNTH ENGINE (x16) |
-                                                  |     (4-Op FM + ADSR + Mix)  |
-                                                  +-----------|-----------------+
-                                                              |
-                                                       [ Audio Out (ΔΣ) ]
-```
+The direct network currently targets a normalized 512-value CLAP embedding and
+eight 78-value candidate heads. Strict live inference uses head zero. This
+network remains a Colab training deliverable until measured quality is adequate.
 
----
+## Milestones
 
-## 2. Target Platform & Constraints
+### M1 — Paper and live-model software
 
-| Item | Decision |
-|------|----------|
-| Board | **ULX3S (Lattice ECP5-85F)** |
-| Neural Model | **MLP Decoder** (~200k-300k INT8 parameters) |
-| Synth Engine | **4-Operator FM** (High-fidelity, hardware-parallel) |
-| On-chip BRAM | 3.74 Mbit (Used for Neural Weights + Sine/Envelope LUTs) |
-| Logic (LUTs) | FM Synthesis is LUT-efficient, leaving room for the Neural Engine |
+- [x] Reproduce CTAG's released CLAP/SynthAX/LES inference path.
+- [x] Provide latest-Colab bootstrap, notebooks, resumable artifacts, and tests.
+- [x] Implement direct model, distillation data generation, evaluation, ONNX,
+  and INT8 export paths.
+- [~] Run the full GPU teacher/training profile and accept against held-out audio
+  and prompt metrics.
 
----
+### M2 — Parameter-to-audio hardware
 
-## 3. The Neural "Brain" (The Parameter Mapper)
+- [x] Freeze and hash the effective 78-parameter render contract.
+- [x] Implement DDS oscillators, noise, ADSRs, LFOs, modulation matrix, mixing,
+  and fixed-point reference model.
+- [x] Implement preset ROM/RAM, atomic external patch commit, live controls, and
+  seven-segment output.
+- [x] Implement PCM FIFO, CRC framing, JTAG UART Avalon master, physical UART
+  fallback, and host playback.
+- [x] Add deterministic assets, unit simulations, waveform correlation checks,
+  and a board-neutral Cyclone IV Quartus project.
+- [ ] Add the exact school-board device/pin assignments and complete Quartus
+  timing/resource reports once the board identity is available.
 
-- **Input:** 512-D CLAP Vector (INT8 Quantized).
-- **Architecture:** 3-4 Layer MLP (e.g., 512 -> 256 -> 128 -> 48).
-- **Outputs:** Specific "knob" values for the FM engine (Normalized 0.0 to 1.0).
-- **Quantization:** **INT8 Symmetric** for both weights and activations.
-- **Verification:** Compare FPGA parameter output vs Python "Golden" model.
+### M3 — Neural inference hardware
 
----
+- [ ] Select the trained model checkpoint and freeze its quantization scales.
+- [ ] Inventory ONNX operations and generate bit-exact layer vectors.
+- [ ] Implement the INT8 matrix-vector controller, activation/weight memories,
+  requantization, and sigmoid approximation.
+- [ ] Connect its 78 outputs to the existing atomic patch interface.
 
-## 4. The FM Synth Engine
+### M4 — Deployment and evaluation
 
-A **4-Operator FM** architecture (similar to a Yamaha DX-series) allows for massive timbral variety.
-- **Operators:** 4 Sine-wave oscillators with Phase Accumulators.
-- **Modulation:** Flexible routing (Op4 -> Op3 -> Op2 -> Op1).
-- **Envelopes:** Dedicated ADSR for each operator (controls volume and modulation depth).
-- **Polyphony:** Target 16 voices using time-multiplexing or parallel hardware.
+- [ ] Measure JTAG throughput, FIFO occupancy, audio gaps, and note-to-host
+  latency on the actual board; use USB-UART if JTAG misses the target.
+- [ ] Compare FPGA captures with the fixed-point oracle and SynthAX perceptual
+  reference across trained presets.
+- [ ] Demonstrate compiled prompt patches, live playing, and no-reburn editing.
 
----
+## Acceptance criteria
 
-## 5. Training Strategy (ESC-50 Audio Loop)
-
-We utilize a two-phase self-supervised approach using the **ESC-50** dataset (2,000 environmental recordings):
-
-1.  **Phase 1: Texture Grounding (Audio-to-Audio):** 
-    - The system takes a target audio clip from ESC-50.
-    - Target Embedding = `CLAP_Audio_Encoder(Target_Audio)`.
-    - The Mapper predicts FM parameters; Synth generates `New_Audio`.
-    - Loss: Minimize Cosine Distance between `Target_Embedding` and `CLAP_Audio_Encoder(New_Audio)`.
-2.  **Phase 2: Class Interpolation (Continuous Texture):**
-    - Group ESC-50 clips by their class (e.g., "Rain," "Cello," "Dog").
-    - Pick two clips from the same class, get their CLAP embeddings, and **SLERP** between them.
-    - The Mapper learns to find FM parameters that match these hybrid textures within a semantic leaf.
-
----
-
-## 6. Execution Roadmap
-
-- **M1 — Semantic Mapping (Python):** Build the training pipeline; train the CLAP-to-FM parameters model; verify "Synth Inversion" works in software.
-- **M2 — FM Engine (RTL):** Build the 4-Op FM synthesis core in Verilog; verify MIDI-to-Audio functionality.
-- **M3 — Neural Engine (RTL):** Implement the Matrix-Vector Multiplication engine to run the Decoder on-chip.
-- **M4 — Integration:** Connect Neural Engine outputs to FM Engine control registers.
-- **M5 — Bring-up:** Deploy to ULX3S; real-time Text-to-FM-Patch demo via MIDI.
-
----
-
-## 7. CTAG Reference Reproduction
-
-The repository includes a separate, reference-compatible reproduction of the
-ICML 2024 CTAG search pipeline under `ctag-repro/`. It preserves the authors'
-78-parameter SynthAX Voice, frozen LAION-CLAP objective, and LES optimizer. This
-serves as the semantic-search baseline and as an implementation reference for
-the later hardware handoff. Its GPU path tracks the latest Colab Python 3.13,
-JAX, and PyTorch runtime while retaining a separate frozen Python 3.9 reference
-environment; it does not change the milestone counts below.
-
-The same package now includes an amortized inference track that creates
-search-derived teachers offline and trains a small eight-head network from the
-512-value CLAP embedding to the exact ordered 78-value patch. Its default live
-path uses head zero without audio reranking or optimization, while its ONNX and
-INT8 exports establish the neural-to-register boundary for later RTL work.
-
----
-
-## 8. Execution Checklist
-
-### M1 — Semantic Model (Python)
-- [x] 1.1 Build a **Differentiable 4-Op FM Synthesizer** in PyTorch
-- [x] 1.2 Training Pipeline: Implement ESC-50 Audio Loading + SLERP Interpolation
-- [ ] 1.3 **Phase 1 Training:** Grounding Mapper via ESC-50 Audio CLAP Embeddings
-- [ ] 1.4 **Phase 2 Training:** Continuity via Intra-Class Audio Interpolation
-- [ ] 1.5 Quantize model to INT8 & Export weights for FPGA
-
-### M2 — FM Synth Engine (RTL)
-- [ ] 2.1 Sine-wave Phase Accumulator + LUT
-- [ ] 2.2 Operator modulation logic (FM feedback/chaining)
-- [ ] 2.3 Per-operator ADSR Envelope Generator
-- [ ] 2.4 Multi-voice MIDI Decoder & Mixer
-
-### M3 — Neural Inference Engine (RTL)
-- [x] 3.1 Basic INT8 MAC PE (`rtl/mac_pe.v`)
-- [ ] 3.2 Matrix-Vector Multiplication FSM (Fully Connected Layer Controller)
-- [ ] 3.3 BRAM-based weight/activation memory system
-- [ ] 3.4 Bit-exact verification (FPGA Output vs Python Golden)
-
-### M4 — System Integration
-- [ ] 4.1 UART Parameter Loader (Interface between Neural and Synth Engines)
-- [ ] 4.2 UART Embedding Receiver (Host to Neural Engine)
-- [ ] 4.3 Top-level routing: MIDI -> FM Synth; UART -> Neural -> FM Synth
-
-### M5 — Deployment & Analysis
-- [ ] 5.1 Final Synth/PnR on ECP5-85F
-- [ ] 5.2 Latency measurement (USB-Embedding-to-Audio)
-- [ ] 5.3 Project Write-up & Demo
+The portable RTL and all testbenches compile with Icarus Verilog. Tonal
+diagnostic patches must correlate at least 0.97 with the SynthAX software
+reference after gain/time alignment; noise is compared by RMS, mean, and
+spectral distribution. RTL samples must track the fixed-point oracle at 0.95 or
+better correlation. Host frames must round-trip through incremental parsing,
+reject bad CRCs, and resynchronize. Board closure additionally requires zero
+FIFO overflows during sustained playback and timing closure at the board clock.

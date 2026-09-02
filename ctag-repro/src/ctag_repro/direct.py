@@ -13,29 +13,32 @@ from typing import Any, Dict, Iterable, Optional
 import numpy as np
 
 
-PARAMETER_CONTRACT = "synthax-voice-flat-78-v1"
-_ADSR = ("attack", "decay", "sustain", "release", "alpha")
-_LFO = ("frequency", "mod_depth", "initial_phase", "sin", "tri", "saw", "rsaw", "sqr")
+PARAMETER_CONTRACT = "synthax-voice-render-flat-78-v2"
+# JAX ravel_pytree sorts mapping keys. This is the effective coordinate order
+# consumed by SynthAXVoice.render_one, which differs from Flax initialization
+# order in the upstream program.
+_ADSR = ("alpha", "attack", "decay", "release", "sustain")
+_LFO = ("frequency", "initial_phase", "mod_depth", "rsaw", "saw", "sin", "sqr", "tri")
 PARAMETER_LAYOUT = (
-    (("params", "modules_keyboard", "midi_f0"), 1),
-    (("params", "modules_keyboard", "duration"), 1),
-    *tuple((("params", "modules_lfo_1_rate_adsr", name), 1) for name in _ADSR),
-    *tuple((("params", "modules_lfo_2_rate_adsr", name), 1) for name in _ADSR),
-    *tuple((("params", "modules_lfo_1_amp_adsr", name), 1) for name in _ADSR),
-    *tuple((("params", "modules_lfo_2_amp_adsr", name), 1) for name in _ADSR),
-    *tuple((("params", "modules_lfo_1", name), 1) for name in _LFO),
-    *tuple((("params", "modules_lfo_2", name), 1) for name in _LFO),
     *tuple((("params", "modules_adsr_1", name), 1) for name in _ADSR),
     *tuple((("params", "modules_adsr_2", name), 1) for name in _ADSR),
-    (("params", "modules_mod_matrix", "mod"), 20),
-    (("params", "modules_vco_1", "tuning"), 1),
-    (("params", "modules_vco_1", "mod_depth"), 1),
-    (("params", "modules_vco_1", "initial_phase"), 1),
-    (("params", "modules_vco_2", "tuning"), 1),
-    (("params", "modules_vco_2", "mod_depth"), 1),
-    (("params", "modules_vco_2", "initial_phase"), 1),
-    (("params", "modules_vco_2", "shape"), 1),
+    (("params", "modules_keyboard", "duration"), 1),
+    (("params", "modules_keyboard", "midi_f0"), 1),
+    *tuple((("params", "modules_lfo_1", name), 1) for name in _LFO),
+    *tuple((("params", "modules_lfo_1_amp_adsr", name), 1) for name in _ADSR),
+    *tuple((("params", "modules_lfo_1_rate_adsr", name), 1) for name in _ADSR),
+    *tuple((("params", "modules_lfo_2", name), 1) for name in _LFO),
+    *tuple((("params", "modules_lfo_2_amp_adsr", name), 1) for name in _ADSR),
+    *tuple((("params", "modules_lfo_2_rate_adsr", name), 1) for name in _ADSR),
     (("params", "modules_mixer", "level"), 3),
+    (("params", "modules_mod_matrix", "mod"), 20),
+    (("params", "modules_vco_1", "initial_phase"), 1),
+    (("params", "modules_vco_1", "mod_depth"), 1),
+    (("params", "modules_vco_1", "tuning"), 1),
+    (("params", "modules_vco_2", "initial_phase"), 1),
+    (("params", "modules_vco_2", "mod_depth"), 1),
+    (("params", "modules_vco_2", "shape"), 1),
+    (("params", "modules_vco_2", "tuning"), 1),
 )
 PARAMETER_CONTRACT_HASH = hashlib.sha256(
     json.dumps(PARAMETER_LAYOUT, separators=(",", ":")).encode()

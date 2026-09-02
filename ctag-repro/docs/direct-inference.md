@@ -12,7 +12,11 @@ inference time. It does not replace or modify the reference reproduction.
 - Optional reranking: render exactly eight heads once and select by CLAP score.
 - Network: `512 → 512 → 512 → 256 → 8×78`, ReLU hidden activations and sigmoid outputs.
 - Artifact identity: CLAP checkpoint SHA-256 plus the
-  `synthax-voice-flat-78-v1` parameter-contract hash.
+  `synthax-voice-render-flat-78-v2` parameter-contract hash.
+
+Version 2 records the actual JAX render-time order (sorted PyTree keys). Any
+workspace or bundle created with the older v1 contract must be rebuilt; bundle
+loading rejects it rather than silently mapping predictions to the wrong knobs.
 
 ## Profiles
 

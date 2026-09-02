@@ -4,4 +4,4 @@ from .config import RunConfig
 from .pipeline import CTAGPipeline, RunResult
 
 __all__ = ["CTAGPipeline", "RunConfig", "RunResult"]
-__version__ = "0.3.0"
+__version__ = "0.4.0"

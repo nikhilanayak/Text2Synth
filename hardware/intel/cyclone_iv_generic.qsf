@@ -1,0 +1,28 @@
+# Board-neutral synthesis project. Change the device and add pin assignments for
+# the actual teaching board before programming it.
+set_global_assignment -name FAMILY "Cyclone IV E"
+set_global_assignment -name DEVICE EP4CE115F29C7
+set_global_assignment -name TOP_LEVEL_ENTITY cyclone_iv_synthax_top
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/synthax/adsr.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/synthax/button_ui.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/synthax/control_interp.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/synthax/lfo.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/synthax/midi_phase_rom.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/synthax/patch_bank.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/synthax/sine_rom.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/synthax/synthax_instrument.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/synthax/tick_generator.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/synthax/voice_core.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/transport/audio_sample_fifo.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/transport/audio_transport.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/transport/jtag_uart_tx_master.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/transport/pcm_framer.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/transport/uart_tx.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/intel/seven_segment_hex.sv
+set_global_assignment -name SYSTEMVERILOG_FILE ../../rtl/intel/cyclone_iv_generic_top.sv
+set_global_assignment -name SEARCH_PATH ../../rtl/synthax
+set_global_assignment -name HEX_FILE ../../rtl/synthax/assets/sine_q1_17.hex
+set_global_assignment -name HEX_FILE ../../rtl/synthax/assets/midi_phase_inc.hex
+set_global_assignment -name HEX_FILE ../../rtl/synthax/assets/diagnostic_presets_q0_16.hex
+set_global_assignment -name SDC_FILE cyclone_iv_generic.sdc
+set_global_assignment -name VERILOG_INPUT_VERSION SYSTEMVERILOG_2005

@@ -1,7 +1,9 @@
-# CLAP-Synth: Embedded Neural FM Synthesizer
+# CLAP-Synth: prompt-programmed SynthAX instrument
 ![Made With AI](https://ai-label.org/image-pack/ai-label_banner-made-with-ai.svg)
 
-A generative synthesizer that uses on-chip Neural Inference to design its own internal FM patches based on semantic embeddings.
+A prompt-to-synthesizer project reproducing CTAG's search baseline, training a
+live CLAP-to-parameter mapper, and running its 78-parameter SynthAX-compatible
+instrument in FPGA logic.
 
 ## 🚀 Quick Start
 
@@ -58,18 +60,30 @@ python3 software/train_fm.py
 
 ## 🛠 Hardware Implementation (RTL)
 
-The synthesizer core is located in `rtl/`. You can run simulations using Icarus Verilog:
+The completed first hardware milestone is a monophonic 48 kHz parameter-to-audio
+core with eight compiled patches, live note/preset/edit buttons, hexadecimal
+seven-segment output, atomic parameter writes for the future neural engine, and
+framed PCM streaming back to the computer over Intel JTAG UART or 3 Mbaud UART.
 
 ```bash
-make mac_pe                # Test the Matrix-Vector cell
-make fm_phase_accumulator  # Test the DDS core
+make synthax
+python3 -m pytest -q tests/test_rtl_synth.py
+python3 host/play_fpga_audio.py --serial /dev/ttyUSB0 --baud 3000000
 ```
+
+Start with [`hardware/README.md`](hardware/README.md) for controls, preset
+burning, transport setup, parameter contract, and Cyclone IV bring-up. The
+provided Quartus project is intentionally board-neutral until the exact board
+part number and pin map are known.
 
 ## 🏗 Architecture
 
-- **Neural Engine:** INT8 MLP Decoder running on FPGA fabric.
-- **Synth Engine:** 4-Operator FM Synthesizer + Filtered Noise Source.
-- **Host Interface:** 512-D CLAP embeddings via UART.
+- **ML:** released CLAP encoder, CTAG/SynthAX search teachers, and an eight-head
+  direct mapper for live inference.
+- **Synth engine:** SynthAX Voice's two oscillators, noise, six ADSRs, two LFOs,
+  and 5×4 modulation matrix in fixed-point RTL.
+- **Host interface:** CRC-framed 48 kHz PCM16 output. The PC plays audio because
+  an on-board audio jack is not assumed.
 
 ---
 **Architect:** Nikhil Nayak

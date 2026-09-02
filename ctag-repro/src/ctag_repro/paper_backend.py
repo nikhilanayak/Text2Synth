@@ -214,7 +214,12 @@ class SynthAXVoice:
         flat_single = self._flax.traverse_util.flatten_dict(single_template)
         from .direct import PARAMETER_CONTRACT_HASH, PARAMETER_LAYOUT
 
-        actual_layout = tuple((tuple(key), int(np.asarray(value).size)) for key, value in flat_single.items())
+        # JAX PyTrees sort dict keys during ravel/unravel; validate the
+        # render-time coordinate order rather than Flax's insertion order.
+        actual_layout = tuple(
+            (tuple(key), int(np.asarray(value).size))
+            for key, value in sorted(flat_single.items())
+        )
         if actual_layout != PARAMETER_LAYOUT:
             import hashlib
             import json
