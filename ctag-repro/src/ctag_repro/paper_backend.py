@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Dict, Iterable, Tuple
@@ -16,6 +17,9 @@ class MissingPaperDependencies(RuntimeError):
 
 
 def _paper_imports() -> Dict[str, Any]:
+    # CTAG runs JAX synthesis and PyTorch CLAP inference in the same process.
+    # JAX's default GPU preallocation can otherwise starve PyTorch on Colab.
+    os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
     try:
         import evosax
         import flax
@@ -23,23 +27,58 @@ def _paper_imports() -> Dict[str, Any]:
         import jax.numpy as jnp
         import laion_clap
         import torch
+        from jax import flatten_util
+        try:
+            from evosax.algorithms.distribution_based import LearnedES
+        except ImportError:  # evosax 0.1.x paper environment
+            LearnedES = None
         from synthax.config import SynthConfig
         from synthax.synth import Voice
     except (ImportError, AttributeError) as exc:
         raise MissingPaperDependencies(
-            "The reference ML stack is unavailable. Install it with "
-            "`python -m pip install -e '.[paper]'`."
+            "The ML stack is unavailable. Use `.[paper]` in the legacy "
+            "Python 3.9 environment or run tools/colab_bootstrap.sh on Colab."
         ) from exc
     return {
         "evosax": evosax,
         "flax": flax,
         "jax": jax,
+        "flatten_util": flatten_util,
         "jnp": jnp,
         "laion_clap": laion_clap,
         "torch": torch,
+        "LearnedES": LearnedES,
         "SynthConfig": SynthConfig,
         "Voice": Voice,
     }
+
+
+def _load_checkpoint(torch_module: Any, checkpoint: Path, device: str) -> Any:
+    """Load the official checkpoint safely across PyTorch generations.
+
+    PyTorch 2.6 made ``weights_only=True`` the default. The released CLAP file
+    contains NumPy scalar metadata, so modern PyTorch needs three narrowly
+    scoped safe globals. Older PyTorch releases do not provide this API and
+    retain their historical loader behavior.
+    """
+
+    safe_globals = getattr(torch_module.serialization, "safe_globals", None)
+    if safe_globals is None:
+        return torch_module.load(
+            str(checkpoint), map_location=device, weights_only=False
+        )
+
+    numpy_core = getattr(np, "_core", np.core)
+    numpy_scalar = numpy_core.multiarray.scalar
+    allowed = [
+        (numpy_scalar, "numpy.core.multiarray.scalar"),
+        np.dtype,
+        type(np.dtype(np.float64)),
+    ]
+    with safe_globals(allowed):
+        return torch_module.load(
+            str(checkpoint), map_location=device, weights_only=True
+        )
 
 
 class JAXKeyStream:
@@ -75,7 +114,7 @@ class CLAPEncoder:
             tmodel="roberta",
             device=device,
         )
-        state = self._torch.load(str(checkpoint), map_location=device)
+        state = _load_checkpoint(self._torch, checkpoint, device)
         state_dict = (
             state["state_dict"]
             if isinstance(state, dict) and "state_dict" in state
@@ -84,6 +123,12 @@ class CLAPEncoder:
         first_key = next(iter(state_dict))
         if first_key.startswith("module"):
             state_dict = {key[7:]: value for key, value in state_dict.items()}
+        # Transformers 5 no longer persists RoBERTa's deterministic position
+        # IDs buffer. It has no learned values, so discard only this known
+        # legacy checkpoint entry and retain strict loading for everything else.
+        position_ids = "text_branch.embeddings.position_ids"
+        if position_ids not in self.model.model.state_dict():
+            state_dict.pop(position_ids, None)
         self.model.model.load_state_dict(state_dict)
         self.model.model.eval()
 
@@ -173,11 +218,11 @@ class SynthAXVoice:
                 for key, value in flat_single.items()
             }
         )
-        self._reshaper = deps["evosax"].ParameterReshaper(unbatched)
-        self._reshape = self._jax.jit(self._reshaper.reshape)
-        if int(self._reshaper.total_params) != self.parameter_count:
+        flat_template, unravel = deps["flatten_util"].ravel_pytree(unbatched)
+        self._reshape = self._jax.jit(self._jax.vmap(unravel))
+        if int(flat_template.size) != self.parameter_count:
             raise RuntimeError(
-                f"expected 78 Voice parameters, found {self._reshaper.total_params}"
+                f"expected 78 Voice parameters, found {flat_template.size}"
             )
 
     def initialize(self, key_stream: JAXKeyStream) -> Any:
@@ -206,39 +251,78 @@ class EvosaxLES:
 
     def __init__(self, config: RunConfig) -> None:
         deps = _paper_imports()
+        self._jax = deps["jax"]
         self._jnp = deps["jnp"]
-        self._strategy = deps["evosax"].strategies.LES(
-            popsize=config.population_size,
-            num_dims=SynthAXVoice.parameter_count,
-            mean_decay=config.mean_decay,
-        )
-        self._params = self._strategy.default_params.replace(
-            sigma_init=config.sigma_init,
-            init_min=0.0,
-            init_max=1.0,
-            clip_min=0.0,
-            clip_max=1.0,
-        )
+        learned_es = deps["LearnedES"]
+        self._modern = learned_es is not None
+        if self._modern:
+            self._strategy = learned_es(
+                population_size=config.population_size,
+                solution=self._jnp.zeros(
+                    (SynthAXVoice.parameter_count,), dtype=self._jnp.float32
+                ),
+            )
+            self._params = self._strategy.default_params.replace(
+                std_init=config.sigma_init
+            )
+        else:
+            self._strategy = deps["evosax"].strategies.LES(
+                popsize=config.population_size,
+                num_dims=SynthAXVoice.parameter_count,
+                mean_decay=config.mean_decay,
+            )
+            self._params = self._strategy.default_params.replace(
+                sigma_init=config.sigma_init,
+                init_min=0.0,
+                init_max=1.0,
+                clip_min=0.0,
+                clip_max=1.0,
+            )
         self._state = None
 
     def initialize(self, key_stream: JAXKeyStream, initial_population: Any) -> None:
-        self._state = self._strategy.initialize(
-            key_stream.split(), self._params, initial_population
-        )
+        if self._modern:
+            initial_population = self._jnp.asarray(initial_population)
+            self._state = self._strategy.init(
+                key_stream.split(), initial_population[0], self._params
+            )
+            # The released CTAG program passed the full initialized SynthAX
+            # population as LES's mean. Preserve that behavior even though the
+            # modern Evosax API now types the initial mean as one solution.
+            self._state = self._state.replace(mean=initial_population)
+        else:
+            self._state = self._strategy.initialize(
+                key_stream.split(), self._params, initial_population
+            )
 
     def ask(self, key_stream: JAXKeyStream) -> Any:
         candidates, self._state = self._strategy.ask(
             key_stream.split(), self._state, self._params
         )
-        return candidates
+        return self._jnp.clip(candidates, 0.0, 1.0)
 
     def tell(self, candidates: Any, fitness: np.ndarray) -> None:
-        self._state = self._strategy.tell(
-            candidates, self._jnp.asarray(fitness), self._state, self._params
-        )
+        if self._modern:
+            self._state, _ = self._strategy.tell(
+                self._jax.random.PRNGKey(0),
+                candidates,
+                self._jnp.asarray(fitness),
+                self._state,
+                self._params,
+            )
+            self._state = self._state.replace(
+                mean=self._jnp.clip(self._state.mean, 0.0, 1.0),
+                std=self._jnp.clip(self._state.std, 0.0, 1.0),
+            )
+        else:
+            self._state = self._strategy.tell(
+                candidates, self._jnp.asarray(fitness), self._state, self._params
+            )
 
     @property
     def best_member(self) -> Any:
+        if self._modern:
+            return self._state.best_solution
         return self._state.best_member
 
     @property

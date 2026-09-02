@@ -4,14 +4,15 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "ctag-repro"
-version = "0.1.0"
+version = "0.2.0"
 description = "Reference-compatible reproduction of CTAG text-to-synth programming"
 readme = "README.md"
-requires-python = ">=3.9,<3.12"
+requires-python = ">=3.9"
 license = {text = "MIT"}
 authors = [{name = "Synthesizer2 contributors"}]
 dependencies = [
-  "numpy>=1.23,<2",
+  "numpy>=1.23,<3",
+  "packaging>=24,<27",
   "PyYAML>=6,<7",
 ]
 
@@ -39,6 +40,24 @@ paper = [
   "tqdm==4.65.0",
   "transformers==4.27.2",
   "urllib3<2; sys_platform == 'darwin'",
+]
+colab = [
+  "braceexpand==0.1.7",
+  "chex==0.1.92",
+  "evosax==0.3.1",
+  "flax==0.12.9",
+  "ftfy==6.3.1",
+  "h5py>=3.12,<4",
+  "librosa==0.11.0",
+  "pandas==2.2.3",
+  "progressbar2>=4.5,<5",
+  "scikit-learn==1.6.1",
+  "scipy==1.16.3",
+  "soundfile==0.14.0",
+  "synthax==0.2.2",
+  "torchlibrosa==0.1.0",
+  "webdataset==1.0.2",
+  "wget==3.2",
 ]
 dev = [
   "pytest>=7,<9",

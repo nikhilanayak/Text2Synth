@@ -22,7 +22,19 @@ from .prompts import load_prompts
 
 def _dependency_status() -> Dict[str, str]:
     result: Dict[str, str] = {}
-    for package in ("jax", "flax", "evosax", "synthax", "laion-clap", "torch"):
+    for package in (
+        "numpy",
+        "jax",
+        "jaxlib",
+        "flax",
+        "evosax",
+        "synthax",
+        "laion-clap",
+        "torch",
+        "torchvision",
+        "transformers",
+        "numba",
+    ):
         try:
             result[package] = metadata.version(package)
         except metadata.PackageNotFoundError:
@@ -112,6 +124,16 @@ def command_setup(args: argparse.Namespace) -> int:
         value != "missing" for value in payload["dependencies"].values()
     )
     return 0 if ready or not args.strict else 1
+
+
+def command_doctor(args: argparse.Namespace) -> int:
+    """Report whether package and accelerator versions match modern Colab."""
+
+    from .runtime import runtime_report
+
+    payload = runtime_report(require_gpu=args.require_gpu)
+    print(json.dumps(payload, indent=2, sort_keys=True))
+    return 0 if payload["compatible"] else 1
 
 
 def _run_pipeline(args: argparse.Namespace, force_paper: bool = False) -> int:
@@ -213,6 +235,16 @@ def build_parser() -> argparse.ArgumentParser:
     setup.add_argument("--force", action="store_true")
     setup.add_argument("--strict", action="store_true")
     setup.set_defaults(handler=command_setup)
+
+    doctor = subparsers.add_parser(
+        "doctor", help="validate the current Colab numerical and GPU runtime"
+    )
+    doctor.add_argument(
+        "--require-gpu",
+        action="store_true",
+        help="fail unless both JAX and PyTorch can use the GPU",
+    )
+    doctor.set_defaults(handler=command_doctor)
 
     generate = subparsers.add_parser("generate", help="run CTAG optimization")
     _add_run_arguments(generate)

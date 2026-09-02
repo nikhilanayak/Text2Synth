@@ -7,6 +7,7 @@ and Nikhil Singh. The pinned source revision is
 The ESC-10, ESC-50, and AudioSet prompt lists in `data/` are copied from that
 revision under the same license.
 
-SynthAX 0.2.1 is MIT licensed. LAION-CLAP code and checkpoints are external
-dependencies and are not redistributed by this repository. See each upstream
-project for its applicable code, data, and model terms.
+SynthAX 0.2.1 (legacy reference) and 0.2.2 (modern Colab adapter) are MIT
+licensed. LAION-CLAP code and checkpoints are external dependencies and are
+not redistributed by this repository. See each upstream project for its
+applicable code, data, and model terms.

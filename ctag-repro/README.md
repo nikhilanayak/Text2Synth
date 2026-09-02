@@ -1,5 +1,7 @@
 # CTAG reproduction
 
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/nikhilanayak/Synthesizer/blob/main/ctag-repro/CTAG_Colab.ipynb)
+
 This repository recreates **Creative Text-to-Audio Generation via Synthesizer
 Programming** (Cherep, Singh, and Shand, ICML 2024). CTAG searches the 78
 interpretable parameters of the SynthAX `Voice` synthesizer and uses LAION-CLAP
@@ -27,6 +29,13 @@ control signals, and seed 42. The `smoke` profile changes only the search budget
 to population 2 and 2 iterations.
 
 ## Installation
+
+For a GPU run, use the badge above or follow [COLAB.md](COLAB.md). The modern
+path runs directly on Colab's Python 3.13, JAX 0.11 CUDA plugin, and PyTorch
+2.11 CUDA runtime. It preserves those accelerator wheels while installing a
+compatible Flax 0.12.9 and current Evosax/SynthAX adapters.
+
+### Legacy paper environment
 
 The authors released against Python 3.9 and older JAX/PyTorch packages. Start
 with a clean environment:
@@ -58,8 +67,8 @@ Full released search configuration:
 ctag reproduce --prompt "train horn" --device cpu
 ```
 
-Google Colab setup, including an isolated paper-compatible Python environment
-and CUDA-enabled JAX wheel, is documented in [COLAB.md](COLAB.md).
+The latest-runtime Google Colab setup and its audited package matrix are
+documented in [COLAB.md](COLAB.md).
 
 The result of a single evolutionary run can vary substantially. The paper's
 listening study drew from 10 independently generated sounds per prompt. Generate

@@ -7,6 +7,12 @@ because their internal `WHEEL` files incorrectly declare x86-64 tags. The actual
 Torch extension is arm64, the gRPC extension is universal, both import and
 execute natively, and all real-backend tests pass.
 
+Modern compatibility environment: macOS 15.5 arm64, Python 3.13.15, NumPy
+2.1.3, JAX/JAXlib 0.11.1, Flax 0.12.9, Evosax 0.3.1, SynthAX 0.2.2, PyTorch
+2.11.0, Transformers 5.16.1, and LAION-CLAP 1.1.7. These versions match the
+2026-09-02 Google Colab GPU manifest except for the intentional Flax upgrade
+and the host-specific CPU rather than CUDA wheel tags.
+
 ## External model
 
 - File: `checkpoints/630k-audioset-best.pt`
@@ -16,9 +22,17 @@ execute natively, and all real-backend tests pass.
 
 ## Verified behavior
 
-- Core suite: 17 tests pass and the checkpoint-backed integration test passes
-  separately. Legacy-library deprecation warnings are expected and do not
-  affect numerical results.
+- Core suite: 22 tests pass under both Python 3.9 and Python 3.13. The
+  checkpoint-backed integration test passes separately under both stacks.
+  Legacy-library deprecation warnings are expected and do not affect numerical
+  results.
+- Modern checkpoint loading uses PyTorch's restricted weights-only loader. The
+  official checkpoint produces finite `(1, 512)` text and audio embeddings
+  under NumPy 2 and Transformers 5.
+- The Colab bootstrap preserves the preinstalled CUDA-enabled JAX and PyTorch
+  wheels, upgrades Flax, and rejects a runtime unless both frameworks report a
+  GPU. The same bootstrap completed dependency resolution locally and stopped
+  at the expected GPU guard on the CPU-only validation host.
 - SynthAX Voice: exactly 78 flattened parameters.
 - Candidate render: `(2, 78)` patches produced finite `(2, 96000)` audio.
 - CLAP: finite, unit-length `(2, 512)` text and audio embeddings.

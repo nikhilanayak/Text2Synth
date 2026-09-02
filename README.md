@@ -22,18 +22,21 @@ This will create a virtual environment, install all dependencies, and initialize
 The reference-compatible reproduction of *Creative Text-to-Audio Generation
 via Synthesizer Programming* lives in [`ctag-repro/`](ctag-repro/). It includes
 the official CLAP checkpoint downloader, SynthAX/LES search pipeline, tests,
-reproducibility metadata, and a Google Colab bootstrap.
+reproducibility metadata, and a latest-runtime Google Colab notebook.
 
 ```bash
 cd ctag-repro
-python3.11 -m venv .venv
+python3.9 -m venv .venv
 source .venv/bin/activate
 python -m pip install -e '.[paper]'
 ctag setup --download --strict
 ctag generate --profile smoke --prompt "train horn"
 ```
 
-For a GPU runtime, follow [`ctag-repro/COLAB.md`](ctag-repro/COLAB.md).
+For a GPU runtime, [open the runnable Colab notebook](https://colab.research.google.com/github/nikhilanayak/Synthesizer/blob/main/ctag-repro/CTAG_Colab.ipynb)
+or follow [`ctag-repro/COLAB.md`](ctag-repro/COLAB.md). It uses Colab's native
+Python 3.13, JAX CUDA plugin, and PyTorch CUDA build without replacing their
+accelerator wheels.
 
 ### 3. Weights & Biases
 Login to W&B to track your training:

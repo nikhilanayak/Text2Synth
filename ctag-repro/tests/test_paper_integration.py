@@ -18,10 +18,12 @@ pytestmark = pytest.mark.integration
     reason="set CTAG_RUN_INTEGRATION=1 to load the official CLAP checkpoint",
 )
 def test_real_backend_end_to_end():
-    checkpoint = Path("checkpoints/630k-audioset-best.pt")
+    checkpoint = Path(
+        os.environ.get("CTAG_CHECKPOINT", "checkpoints/630k-audioset-best.pt")
+    )
     if not checkpoint.is_file():
         pytest.skip("official checkpoint is not present")
-    config = RunConfig.smoke(iterations=1)
+    config = RunConfig.smoke(iterations=1, checkpoint=str(checkpoint))
     pipeline = CTAGPipeline.paper(config)
     assert pipeline.synthesizer.parameter_count == 78
     result = pipeline.run(["train horn"], write_artifacts=False)[0]

@@ -101,7 +101,9 @@ The repository includes a separate, reference-compatible reproduction of the
 ICML 2024 CTAG search pipeline under `ctag-repro/`. It preserves the authors'
 78-parameter SynthAX Voice, frozen LAION-CLAP objective, and LES optimizer. This
 serves as the semantic-search baseline and as an implementation reference for
-the later hardware handoff; it does not change the milestone counts below.
+the later hardware handoff. Its GPU path tracks the latest Colab Python 3.13,
+JAX, and PyTorch runtime while retaining a separate frozen Python 3.9 reference
+environment; it does not change the milestone counts below.
 
 ---
 
