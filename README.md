@@ -1,9 +1,13 @@
-# CLAP-Synth: prompt-programmed SynthAX instrument
-![Made With AI](https://ai-label.org/image-pack/ai-label_banner-made-with-ai.svg)
+# Text2Synth: Synthesized Audio Generation Model Programmed on Cyclone IV FPGA
 
-A prompt-to-synthesizer project reproducing CTAG's search baseline, training a
-live CLAP-to-parameter mapper, and running its 78-parameter SynthAX-compatible
-instrument in FPGA logic.
+## How It Works
+Text2Synth takes text prompts and converts them to audio in two steps: inference and synthesization
+
+### Inference
+The goal of this step is to convert a text prompt into a 78-parameter vector that encodes the sound as abstract synthesizer parameters. First, the prompt is embedded using the CLAP (Contrastive Audio-Language Pretraining) model. Then, a search algorithm is used to determine the closest synthesizer parameters that result in a similar CLAP embedding vector. This process is heavily inspired by the CTAG project, which uses the same basic process for audio synthesization. 
+
+### Synthesization
+Next, the 78-parameter vector is converted into an audio signal using the digital synthesizer and streamed back to the host computer. This process takes as input the current MIDI note being played, meaning once inference is done, the FPGA can act as a realtime instrument with relatively low latency. 
 
 ## 🚀 Quick Start
 
