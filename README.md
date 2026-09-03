@@ -9,7 +9,7 @@ The goal of this step is to convert a text prompt into a 78-parameter vector tha
 ### Synthesization
 Next, the 78-parameter vector is converted into an audio signal using the digital synthesizer and streamed back to the host computer. This process takes as input the current MIDI note being played, meaning once inference is done, the FPGA can act as a realtime instrument with relatively low latency. 
 
-## 🚀 Quick Start
+## Quick Start
 
 ### 1. Prerequisites
 Ensure you have the following installed:
@@ -62,7 +62,7 @@ Start the two-phase training loop (Physical Grounding & Semantic Refinement):
 python3 software/train_fm.py
 ```
 
-## 🛠 Hardware Implementation (RTL)
+## Hardware Implementation (RTL)
 
 The completed first hardware milestone is a monophonic 48 kHz parameter-to-audio
 core with eight compiled patches, live note/preset/edit buttons, hexadecimal
@@ -80,7 +80,7 @@ burning, transport setup, parameter contract, and Cyclone IV bring-up. The
 provided Quartus project is intentionally board-neutral until the exact board
 part number and pin map are known.
 
-## 🏗 Architecture
+## Architecture
 
 - **ML:** released CLAP encoder, CTAG/SynthAX search teachers, and an eight-head
   direct mapper for live inference.
@@ -88,6 +88,3 @@ part number and pin map are known.
   and 5×4 modulation matrix in fixed-point RTL.
 - **Host interface:** CRC-framed 48 kHz PCM16 output. The PC plays audio because
   an on-board audio jack is not assumed.
-
----
-**Architect:** Nikhil Nayak
